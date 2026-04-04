@@ -39,7 +39,7 @@ All data fits comfortably in UserDefaults. No database needed.
 
 ```swift
 // UserDefaults — local app preferences
-"checkTime"        : String     // e.g. "23:30" — when to run daily check
+"fetchTime"        : String     // e.g. "23:30" — when to run daily fetch
 "soundEnabled"     : Bool       // play sound on notification
 "soundName"        : String     // "paper-flip" | "default" | "none"
 "badgeStyle"       : String     // "count" | "dot" | "none"
@@ -278,7 +278,7 @@ struct ArXivMonitorApp: App {
 
 ```
 General
-  Check schedule:    [Daily at 11:00 PM ▼]
+  Fetch schedule:    [Daily at 11:00 PM ▼]
   Launch at login:   [Toggle]
 
 Notifications
@@ -333,7 +333,7 @@ All notifications share `threadIdentifier = "arxiv-monitor"` so they stack in No
 Since it's a menu bar app, it stays running. Use a simple `Timer` or `DispatchQueue` that fires once daily:
 
 ```swift
-// Calculate next check time (e.g., 11 PM local time today or tomorrow)
+// Calculate next fetch time (e.g., 11 PM local time today or tomorrow)
 // Schedule a Timer to fire at that time
 // On fire: fetch → diff → notify → update lastFetchedAt
 // Reschedule for next day
@@ -382,7 +382,7 @@ A future iPhone widget reads from this store to display unread papers.
 11. Register notification actions (Open, Dismiss All)
 12. Build `AddFilterSheet` — add/edit/remove filters
 13. Build `FilterListView` — sidebar with toggle/delete
-14. Build `SettingsView` — check time, sound, badge, launch at login
+14. Build `SettingsView` — fetch time, sound, badge, launch at login
 15. Add badge overlay on menu bar icon
 
 ### Phase 3: History + Window
