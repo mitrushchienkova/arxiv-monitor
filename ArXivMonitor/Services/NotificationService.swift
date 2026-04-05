@@ -26,7 +26,7 @@ final class NotificationService {
         )
         let dismissAllAction = UNNotificationAction(
             identifier: "DISMISS_ALL_ACTION",
-            title: "Dismiss All",
+            title: "Mark All as Read",
             options: []
         )
         let category = UNNotificationCategory(

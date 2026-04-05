@@ -44,9 +44,9 @@ struct MenuBarPopover: View {
             // Content
             if appState.savedSearches.isEmpty {
                 emptySearchesView
-            } else if appState.isFetching && appState.matchedPapers.isEmpty {
+            } else if appState.isFetching && appState.allPapersSorted.isEmpty {
                 fetchingView
-            } else if appState.newPapers.isEmpty && appState.matchedPapers.isEmpty {
+            } else if appState.newPapers.isEmpty && appState.allPapersSorted.isEmpty {
                 noPapersView
             } else {
                 paperList

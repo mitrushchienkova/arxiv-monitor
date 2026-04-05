@@ -3,6 +3,7 @@ import SwiftUI
 enum SidebarSelection: Hashable {
     case allPapers
     case search(UUID)
+    case trash
 }
 
 struct MainWindowView: View {

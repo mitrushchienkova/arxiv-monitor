@@ -3,19 +3,42 @@ import SwiftUI
 import ServiceManagement
 import UniformTypeIdentifiers
 
+/// Current data schema version. Increment when making breaking changes to PersistedData.
+let currentDataVersion = 1
+
 /// Persisted data structure for data.json.
 struct PersistedData: Codable {
+    var dataVersion: Int
     var savedSearches: [SavedSearch]
     var matchedPapers: [String: MatchedPaper]
     var lastCycleAt: String?
     var lastCycleFailedSearchIDs: [UUID]
 
     static let empty = PersistedData(
+        dataVersion: currentDataVersion,
         savedSearches: [],
         matchedPapers: [:],
         lastCycleAt: nil,
         lastCycleFailedSearchIDs: []
     )
+
+    init(dataVersion: Int = currentDataVersion, savedSearches: [SavedSearch], matchedPapers: [String: MatchedPaper],
+         lastCycleAt: String?, lastCycleFailedSearchIDs: [UUID]) {
+        self.dataVersion = dataVersion
+        self.savedSearches = savedSearches
+        self.matchedPapers = matchedPapers
+        self.lastCycleAt = lastCycleAt
+        self.lastCycleFailedSearchIDs = lastCycleFailedSearchIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dataVersion = try container.decodeIfPresent(Int.self, forKey: .dataVersion) ?? 1
+        savedSearches = try container.decode([SavedSearch].self, forKey: .savedSearches)
+        matchedPapers = try container.decode([String: MatchedPaper].self, forKey: .matchedPapers)
+        lastCycleAt = try container.decodeIfPresent(String.self, forKey: .lastCycleAt)
+        lastCycleFailedSearchIDs = try container.decodeIfPresent([UUID].self, forKey: .lastCycleFailedSearchIDs) ?? []
+    }
 }
 
 /// Observable app state. Owns all persisted data and fetch logic.
@@ -55,6 +78,12 @@ final class AppState: ObservableObject {
     var allPapersSorted: [MatchedPaper] {
         matchedPapers.values
             .filter { !$0.isTrash }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var trashedPapers: [MatchedPaper] {
+        matchedPapers.values
+            .filter(\.isTrash)
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -101,10 +130,25 @@ final class AppState: ObservableObject {
         do {
             let data = try Data(contentsOf: dataFileURL)
             let persisted = try JSONDecoder().decode(PersistedData.self, from: data)
+
+            // Auto-backup before applying any migration
+            if persisted.dataVersion < currentDataVersion {
+                print("[ArXivMonitor] Migrating data from version \(persisted.dataVersion) to \(currentDataVersion)")
+                let fm = FileManager.default
+                try? fm.createDirectory(at: backupDirectoryURL, withIntermediateDirectories: true)
+                let migrationBackup = backupDirectoryURL.appendingPathComponent("pre-migration-v\(persisted.dataVersion).json")
+                try? data.write(to: migrationBackup, options: .atomic)
+            }
+
             savedSearches = persisted.savedSearches
             matchedPapers = persisted.matchedPapers
             lastCycleAt = persisted.lastCycleAt
             lastCycleFailedSearchIDs = persisted.lastCycleFailedSearchIDs
+
+            // Re-save to update version stamp if needed
+            if persisted.dataVersion < currentDataVersion {
+                save()
+            }
         } catch {
             print("[ArXivMonitor] Failed to load data.json, starting fresh: \(error)")
         }
@@ -127,6 +171,9 @@ final class AppState: ObservableObject {
 
     // MARK: - Export & Backup
 
+    /// Tracks last backup check to avoid re-checking on every save.
+    private var lastBackupCheckDate: Date?
+
     private var backupDirectoryURL: URL {
         dataDirectoryURL.appendingPathComponent("backups", isDirectory: true)
     }
@@ -146,6 +193,12 @@ final class AppState: ObservableObject {
     }
 
     private func performBackupIfNeeded() {
+        // In-memory throttle: don't check filesystem more than once per hour
+        if let lastCheck = lastBackupCheckDate, Date().timeIntervalSince(lastCheck) < 3600 {
+            return
+        }
+        lastBackupCheckDate = Date()
+
         let fm = FileManager.default
         guard fm.fileExists(atPath: dataFileURL.path) else { return }
 
@@ -289,6 +342,14 @@ final class AppState: ObservableObject {
         guard var paper = matchedPapers[paperID], paper.isTrash else { return }
         paper.isTrash = false
         matchedPapers[paperID] = paper
+        save()
+    }
+
+    func emptyTrash() {
+        let trashedIDs = matchedPapers.values.filter(\.isTrash).map(\.id)
+        for id in trashedIDs {
+            matchedPapers.removeValue(forKey: id)
+        }
         save()
     }
 
@@ -441,7 +502,8 @@ final class AppState: ObservableObject {
                                     link: paper.link,
                                     matchedSearchIDs: searchIDs,
                                     foundAt: existing.foundAt,
-                                    isNew: true
+                                    isNew: !existing.isTrash,
+                                    isTrash: existing.isTrash
                                 )
                             }
                         } else {
@@ -531,6 +593,9 @@ final class AppState: ObservableObject {
         }
 
         print("[ArXivMonitor] Fetch cycle complete: \(pendingNew.count) new, \(pendingRevisions.count) revised, \(failedSearchIDs.count) failed")
+
+        // Check if a backup is due (handles long-running menu bar apps)
+        performBackupIfNeeded()
 
         isFetching = false
         fetchProgress = nil

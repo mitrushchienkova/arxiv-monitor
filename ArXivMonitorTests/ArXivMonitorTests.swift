@@ -460,6 +460,42 @@ final class AppStateTests: XCTestCase {
         )
         XCTAssertTrue(paper2.isRevision)
     }
+
+    func testEmptyTrash() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        state.matchedPapers["a"] = MatchedPaper(
+            id: "a", title: "A", authors: "A", primaryCategory: "cs.AI",
+            categories: [], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "", matchedSearchIDs: [UUID()],
+            foundAt: "2024-01-01T00:00:00Z", isNew: false, isTrash: true
+        )
+        state.matchedPapers["b"] = MatchedPaper(
+            id: "b", title: "B", authors: "B", primaryCategory: "cs.AI",
+            categories: [], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "", matchedSearchIDs: [UUID()],
+            foundAt: "2024-01-01T00:00:00Z", isNew: true
+        )
+        XCTAssertEqual(state.trashedPapers.count, 1)
+        XCTAssertEqual(state.allPapersSorted.count, 1)
+        state.emptyTrash()
+        XCTAssertEqual(state.trashedPapers.count, 0)
+        XCTAssertEqual(state.allPapersSorted.count, 1) // non-trashed paper still there
+    }
+
+    func testDataVersionBackwardCompatibility() {
+        // Simulate data without dataVersion field (pre-versioning)
+        let json = """
+        {
+            "savedSearches": [],
+            "matchedPapers": {},
+            "lastCycleFailedSearchIDs": []
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let persisted = try! JSONDecoder().decode(PersistedData.self, from: data)
+        XCTAssertEqual(persisted.dataVersion, 1)
+        XCTAssertTrue(persisted.savedSearches.isEmpty)
+    }
 }
 
 final class PollSchedulerTests: XCTestCase {

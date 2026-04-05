@@ -12,7 +12,7 @@ struct SearchListView: View {
                 HStack {
                     Label("All Papers", systemImage: "doc.text")
                     Spacer()
-                    let total = appState.matchedPapers.count
+                    let total = appState.allPapersSorted.count
                     let unread = appState.unreadCount
                     if unread > 0 {
                         Text("\(unread)")
@@ -71,6 +71,18 @@ struct SearchListView: View {
                             appState.deleteSearch(search.id)
                         }
                     }
+                }
+            }
+            if !appState.trashedPapers.isEmpty {
+                Section {
+                    HStack {
+                        Label("Trash", systemImage: "trash")
+                        Spacer()
+                        Text("\(appState.trashedPapers.count)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(SidebarSelection.trash)
                 }
             }
         }

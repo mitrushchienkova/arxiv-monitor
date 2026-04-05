@@ -28,7 +28,7 @@ struct SettingsView: View {
                 Button("Export Data...") {
                     appState.exportData()
                 }
-                Text("Exports saved searches, papers, and all settings to a JSON file.")
+                Text("Exports saved searches and paper history to a JSON file.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
