@@ -24,6 +24,7 @@
 		A1000015000000000000000F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015000000000000000F; };
 		A10000160000000000000010 /* ArXivMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000010; };
 		B10000010000000000000001 /* ArXivMonitorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000010000000000000001; };
+		C10000010000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C20000010000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,6 +67,7 @@
 		A2000020000000000000001A /* ArXivMonitorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArXivMonitorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000010000000000000001 /* ArXivMonitorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArXivMonitorUITests.swift; sourceTree = "<group>"; };
 		B20000020000000000000002 /* ArXivMonitorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArXivMonitorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C20000010000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,6 +112,7 @@
 				A20000020000000000000002 /* AppState.swift */,
 				A20000170000000000000011 /* Info.plist */,
 				A20000180000000000000012 /* ArXivMonitor.entitlements */,
+				C20000010000000000000001 /* Assets.xcassets */,
 				A70000030000000000000003 /* Models */,
 				A70000040000000000000004 /* Services */,
 				A70000050000000000000005 /* Views */,
@@ -186,6 +189,7 @@
 			buildPhases = (
 				A90000010000000000000001 /* Sources */,
 				A60000010000000000000001 /* Frameworks */,
+				C30000010000000000000001 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -259,6 +263,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C30000010000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C10000010000000000000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A90000010000000000000001 /* Sources */ = {
