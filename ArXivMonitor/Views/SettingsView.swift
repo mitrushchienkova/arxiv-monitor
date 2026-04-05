@@ -20,22 +20,18 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(notificationStatusColor)
 
-                HStack {
-                    if let actionTitle = primaryNotificationActionTitle {
-                        Button(actionTitle) {
-                            handlePrimaryNotificationAction()
+                if shouldShowNotificationActions {
+                    HStack {
+                        if let actionTitle = primaryNotificationActionTitle {
+                            Button(actionTitle) {
+                                handlePrimaryNotificationAction()
+                            }
                         }
-                    }
 
-                    Button("Refresh Status") {
-                        Task {
-                            await appState.refreshNotificationAuthorizationStatus()
-                        }
-                    }
-
-                    if canSendTestNotification {
-                        Button("Send Test Notification") {
-                            appState.sendTestNotification()
+                        Button("Refresh Status") {
+                            Task {
+                                await appState.refreshNotificationAuthorizationStatus()
+                            }
                         }
                     }
                 }
@@ -77,6 +73,10 @@ struct SettingsView: View {
         default:
             return false
         }
+    }
+
+    private var shouldShowNotificationActions: Bool {
+        !canSendTestNotification
     }
 
     private var primaryNotificationActionTitle: String? {
