@@ -65,7 +65,7 @@ struct MenuBarPopover: View {
                 Spacer()
 
                 if appState.unreadCount > 0 {
-                    Button("Dismiss All") {
+                    Button("Mark All as Read") {
                         appState.dismissAll()
                     }
                     .buttonStyle(.borderless)
@@ -173,7 +173,14 @@ struct MenuBarPopover: View {
                             paper: paper,
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
-                            onDismiss: { appState.dismissPaper(paper.id) }
+                            onDismiss: { appState.dismissPaper(paper.id) },
+                            onToggleRead: {
+                                if paper.isNew {
+                                    appState.markRead(paperID: paper.id)
+                                } else {
+                                    appState.markUnread(paperID: paper.id)
+                                }
+                            }
                         )
                         .padding(.horizontal, 12)
                         Divider().padding(.leading, 12)
@@ -195,7 +202,14 @@ struct MenuBarPopover: View {
                             paper: paper,
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
-                            onDismiss: { appState.dismissPaper(paper.id) }
+                            onDismiss: { appState.dismissPaper(paper.id) },
+                            onToggleRead: {
+                                if paper.isNew {
+                                    appState.markRead(paperID: paper.id)
+                                } else {
+                                    appState.markUnread(paperID: paper.id)
+                                }
+                            }
                         )
                         .padding(.horizontal, 12)
                         Divider().padding(.leading, 12)

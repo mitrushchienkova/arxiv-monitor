@@ -23,8 +23,17 @@ struct SettingsView: View {
                     Text("None").tag("none")
                 }
             }
+
+            Section("Data") {
+                Button("Export Data...") {
+                    appState.exportData()
+                }
+                Text("Exports saved searches, papers, and all settings to a JSON file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 350, height: 220)
+        .frame(width: 350, height: 300)
     }
 }

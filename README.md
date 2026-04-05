@@ -52,7 +52,8 @@ Each paper row displays:
 - "Revised" tag (orange) for papers updated after initial publication
 - Published and updated dates
 - Colored badges for matching searches
-- Dismiss button to remove papers from the list
+- **Trash** button to move papers to trash (soft-delete, revertable)
+- **Right-click context menu** with "Mark as Read" / "Mark as Unread" toggle
 - Click title to open on arXiv
 
 ### Search Management
@@ -76,6 +77,12 @@ Each paper row displays:
 - 3-second delay between API calls to respect arXiv rate limits
 - Launch at login option
 
+### Trash
+
+- Dismissing a paper moves it to trash instead of permanently deleting it
+- Trashed papers are hidden from all views and won't trigger re-fetch
+- Papers can be restored from trash
+
 ### Data Persistence
 
 - Saved searches and paper history stored in a JSON file (`data.json`) in the app's sandboxed Application Support directory
@@ -83,8 +90,16 @@ Each paper row displays:
 - Papers are kept forever once fetched (no automatic pruning)
 - Settings (sound, badge style, launch at login) stored in UserDefaults
 
+### Export & Backup
+
+- **Manual export**: Export all data (searches, papers, read/unread state) to a JSON file via Settings
+- **Automatic backup**: The app automatically backs up `data.json` every 7 days to a `backups/` directory within Application Support
+- Keeps the last 4 backups (~1 month of coverage)
+- Backups are created on app launch if 7+ days have passed since the last one
+
 ### Testing
 
+- Unit tests for URL query building, XML parsing, search model equality, app state operations (trash, restore, mark read/unread, backup)
 - E2E UI tests covering settings, search management, data display, and sidebar functionality
 - Launch with `--sample-data` flag to populate with test data
 
@@ -128,6 +143,7 @@ xcodebuild -project ArXivMonitor.xcodeproj -scheme ArXivMonitor -configuration R
 | What | Where |
 |------|-------|
 | Paper history + saved searches | `~/Library/Containers/com.arxivmonitor.app/Data/Library/Application Support/ArXivMonitor/data.json` |
+| Automatic backups | `~/Library/Containers/com.arxivmonitor.app/Data/Library/Application Support/ArXivMonitor/backups/` |
 | Settings (sound, badge, launch) | UserDefaults (`com.arxivmonitor.app`) |
 
 To reset the app to a clean state:

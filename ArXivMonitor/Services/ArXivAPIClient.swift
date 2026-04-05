@@ -45,8 +45,8 @@ struct ArXivAPIClient {
             searchQuery = "(\(searchQuery)) AND submittedDate:[\(startDate) TO \(endDate)]"
         }
 
-        // Build URL manually to preserve literal brackets in submittedDate:[... TO ...]
-        // URLComponents percent-encodes brackets (%5B/%5D) which arXiv does not recognize.
+        // Build URL manually to preserve colons, parentheses, and other query operators
+        // that arXiv expects in the search_query parameter.
         guard let encodedQuery = searchQuery.addingPercentEncoding(
             withAllowedCharacters: .arXivQueryAllowed
         ) else { return nil }
@@ -141,7 +141,7 @@ private extension CharacterSet {
     static let arXivQueryAllowed: CharacterSet = {
         var set = CharacterSet.urlQueryAllowed
         set.remove(charactersIn: "&=") // must encode these to avoid breaking query string
-        set.insert(charactersIn: "[]():") // arXiv needs these literally
+        set.insert(charactersIn: "():") // arXiv needs these literally
         return set
     }()
 }

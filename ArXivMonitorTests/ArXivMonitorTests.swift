@@ -68,6 +68,34 @@ final class ArXivAPIClientTests: XCTestCase {
                        "Query should contain both ti: and abs: for titleAndAbstract scope, got: \(query)")
     }
 
+    func testBuildQueryURL_keywordWithDateFilter_noDoubleEncoding() {
+        let search = SavedSearch(
+            name: "Test",
+            clauses: [SearchClause(field: .keyword, value: "diffusion", scope: .titleAndAbstract)],
+            fetchFromDate: "2026-03-01"
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertFalse(query.contains("%2520"),
+                        "URL should not contain double-encoded spaces: \(query)")
+        XCTAssertTrue(query.contains("OR"),
+                       "URL should contain OR operator: \(query)")
+    }
+
+    func testBuildQueryURL_noDoubleEncodingRoundTrip() {
+        let search = SavedSearch(
+            name: "Test",
+            clauses: [SearchClause(field: .keyword, value: "flow matching", scope: .titleAndAbstract)],
+            fetchFromDate: "2026-03-01"
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let abs = url!.absoluteString
+        XCTAssertFalse(abs.contains("%2520"), "Double-encoded space found: \(abs)")
+        XCTAssertFalse(abs.contains("%2522"), "Double-encoded quote found: \(abs)")
+    }
+
     func testBuildQueryURL_multipleClauses() {
         let search = SavedSearch(
             name: "ML papers by Hinton",
@@ -250,7 +278,83 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.unreadCount, 1)
         state.dismissPaper(paper.id)
         XCTAssertEqual(state.unreadCount, 0)
-        XCTAssertNil(state.matchedPapers[paper.id], "Dismissed paper should be removed entirely")
+        XCTAssertNotNil(state.matchedPapers[paper.id], "Dismissed paper should still exist (trashed)")
+        XCTAssertTrue(state.matchedPapers[paper.id]!.isTrash, "Dismissed paper should be trashed")
+        XCTAssertFalse(state.matchedPapers[paper.id]!.isNew, "Trashed paper should not be new")
+        XCTAssertTrue(state.allPapersSorted.isEmpty, "Trashed paper should not appear in sorted list")
+    }
+
+    func testRestorePaper() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let paper = MatchedPaper(
+            id: "test-001", title: "Test", authors: "A", primaryCategory: "cs.AI",
+            categories: ["cs.AI"], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "https://arxiv.org/abs/test-001",
+            matchedSearchIDs: [UUID()], foundAt: "2024-01-01T00:00:00Z", isNew: false,
+            isTrash: true
+        )
+        state.matchedPapers[paper.id] = paper
+        XCTAssertTrue(state.allPapersSorted.isEmpty)
+        state.restorePaper(paper.id)
+        XCTAssertFalse(state.matchedPapers[paper.id]!.isTrash)
+        XCTAssertEqual(state.allPapersSorted.count, 1)
+    }
+
+    func testIsTrashBackwardCompatibility() throws {
+        let json = """
+        {"id":"test","title":"T","authors":"A","primaryCategory":"cs.AI",
+         "categories":["cs.AI"],"publishedAt":"2024-01-01T00:00:00Z",
+         "updatedAt":"2024-01-01T00:00:00Z","link":"https://arxiv.org/abs/test",
+         "matchedSearchIDs":[],"foundAt":"2024-01-01T00:00:00Z","isNew":false}
+        """
+        let data = json.data(using: .utf8)!
+        let paper = try JSONDecoder().decode(MatchedPaper.self, from: data)
+        XCTAssertFalse(paper.isTrash, "Missing isTrash should default to false")
+    }
+
+    func testMarkUnread() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let paper = MatchedPaper(
+            id: "test-001", title: "Test", authors: "A", primaryCategory: "cs.AI",
+            categories: ["cs.AI"], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "https://arxiv.org/abs/test-001",
+            matchedSearchIDs: [UUID()], foundAt: "2024-01-01T00:00:00Z", isNew: false
+        )
+        state.matchedPapers[paper.id] = paper
+        XCTAssertEqual(state.unreadCount, 0)
+        state.markUnread(paperID: paper.id)
+        XCTAssertEqual(state.unreadCount, 1)
+        XCTAssertTrue(state.matchedPapers[paper.id]!.isNew)
+    }
+
+    func testMarkReadPublic() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let paper = MatchedPaper(
+            id: "test-001", title: "Test", authors: "A", primaryCategory: "cs.AI",
+            categories: ["cs.AI"], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "https://arxiv.org/abs/test-001",
+            matchedSearchIDs: [UUID()], foundAt: "2024-01-01T00:00:00Z", isNew: true
+        )
+        state.matchedPapers[paper.id] = paper
+        XCTAssertEqual(state.unreadCount, 1)
+        state.markRead(paperID: paper.id)
+        XCTAssertEqual(state.unreadCount, 0)
+    }
+
+    func testTrashedPapersFilteredFromSearchResults() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let searchID = UUID()
+        let paper = MatchedPaper(
+            id: "test-001", title: "Test", authors: "A", primaryCategory: "cs.AI",
+            categories: ["cs.AI"], publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z", link: "https://arxiv.org/abs/test-001",
+            matchedSearchIDs: [searchID], foundAt: "2024-01-01T00:00:00Z", isNew: true,
+            isTrash: true
+        )
+        state.matchedPapers[paper.id] = paper
+        XCTAssertTrue(state.papers(for: searchID).isEmpty, "Trashed paper should not appear in search results")
+        XCTAssertTrue(state.newPapers.isEmpty, "Trashed paper should not appear in new papers")
+        XCTAssertEqual(state.unreadCount, 0, "Trashed paper should not count as unread")
     }
 
     func testDismissAll() {

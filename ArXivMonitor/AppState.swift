@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import ServiceManagement
+import UniformTypeIdentifiers
 
 /// Persisted data structure for data.json.
 struct PersistedData: Codable {
@@ -42,23 +43,24 @@ final class AppState: ObservableObject {
 
     // MARK: - Derived
     var unreadCount: Int {
-        matchedPapers.values.filter(\.isNew).count
+        matchedPapers.values.filter { $0.isNew && !$0.isTrash }.count
     }
 
     var newPapers: [MatchedPaper] {
         matchedPapers.values
-            .filter(\.isNew)
+            .filter { $0.isNew && !$0.isTrash }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
     var allPapersSorted: [MatchedPaper] {
         matchedPapers.values
+            .filter { !$0.isTrash }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
     func papers(for searchID: UUID) -> [MatchedPaper] {
         matchedPapers.values
-            .filter { $0.matchedSearchIDs.contains(searchID) }
+            .filter { $0.matchedSearchIDs.contains(searchID) && !$0.isTrash }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -91,6 +93,7 @@ final class AppState: ObservableObject {
         }
         load()
         NotificationService.shared.registerActions()
+        performBackupIfNeeded()
     }
 
     private func load() {
@@ -119,6 +122,77 @@ final class AppState: ObservableObject {
             try data.write(to: dataFileURL, options: .atomic)
         } catch {
             print("[ArXivMonitor] Failed to save data.json: \(error)")
+        }
+    }
+
+    // MARK: - Export & Backup
+
+    private var backupDirectoryURL: URL {
+        dataDirectoryURL.appendingPathComponent("backups", isDirectory: true)
+    }
+
+    func exportData() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "ArXivMonitor-data.json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try FileManager.default.copyItem(at: dataFileURL, to: url)
+        } catch {
+            print("[ArXivMonitor] Export failed: \(error)")
+        }
+    }
+
+    private func performBackupIfNeeded() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dataFileURL.path) else { return }
+
+        do {
+            try fm.createDirectory(at: backupDirectoryURL, withIntermediateDirectories: true)
+        } catch {
+            print("[ArXivMonitor] Failed to create backup directory: \(error)")
+            return
+        }
+
+        let backups = (try? fm.contentsOfDirectory(at: backupDirectoryURL,
+                           includingPropertiesForKeys: [.creationDateKey],
+                           options: .skipsHiddenFiles)) ?? []
+        let sortedBackups = backups
+            .filter { $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+
+        if let mostRecent = sortedBackups.first {
+            let name = mostRecent.deletingPathExtension().lastPathComponent
+            let dateStr = String(name.dropFirst("backup-".count))
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd'T'HHmmss"
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            if let backupDate = formatter.date(from: dateStr),
+               Date().timeIntervalSince(backupDate) < 7 * 24 * 3600 {
+                return
+            }
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HHmmss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        let timestamp = formatter.string(from: Date())
+        let backupURL = backupDirectoryURL.appendingPathComponent("backup-\(timestamp).json")
+
+        do {
+            try fm.copyItem(at: dataFileURL, to: backupURL)
+            print("[ArXivMonitor] Backup created: \(backupURL.lastPathComponent)")
+        } catch {
+            print("[ArXivMonitor] Backup failed: \(error)")
+            return
+        }
+
+        let maxBackups = 4
+        if sortedBackups.count >= maxBackups {
+            for old in sortedBackups.suffix(from: maxBackups - 1) {
+                try? fm.removeItem(at: old)
+            }
         }
     }
 
@@ -197,7 +271,17 @@ final class AppState: ObservableObject {
     }
 
     func dismissPaper(_ paperID: String) {
-        matchedPapers.removeValue(forKey: paperID)
+        guard var paper = matchedPapers[paperID] else { return }
+        paper.isTrash = true
+        paper.isNew = false
+        matchedPapers[paperID] = paper
+        save()
+    }
+
+    func restorePaper(_ paperID: String) {
+        guard var paper = matchedPapers[paperID], paper.isTrash else { return }
+        paper.isTrash = false
+        matchedPapers[paperID] = paper
         save()
     }
 
@@ -217,9 +301,16 @@ final class AppState: ObservableObject {
         save()
     }
 
-    private func markRead(paperID: String) {
+    func markRead(paperID: String) {
         guard var paper = matchedPapers[paperID], paper.isNew else { return }
         paper.isNew = false
+        matchedPapers[paperID] = paper
+        save()
+    }
+
+    func markUnread(paperID: String) {
+        guard var paper = matchedPapers[paperID], !paper.isNew else { return }
+        paper.isNew = true
         matchedPapers[paperID] = paper
         save()
     }

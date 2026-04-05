@@ -41,7 +41,14 @@ struct PaperListView: View {
                             paper: paper,
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
-                            onDismiss: { appState.dismissPaper(paper.id) }
+                            onDismiss: { appState.dismissPaper(paper.id) },
+                            onToggleRead: {
+                                if paper.isNew {
+                                    appState.markRead(paperID: paper.id)
+                                } else {
+                                    appState.markUnread(paperID: paper.id)
+                                }
+                            }
                         )
                     }
                 }

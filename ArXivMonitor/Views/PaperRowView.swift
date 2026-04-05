@@ -5,6 +5,7 @@ struct PaperRowView: View {
     var savedSearches: [SavedSearch] = []
     let onOpen: () -> Void
     let onDismiss: () -> Void
+    var onToggleRead: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -63,13 +64,24 @@ struct PaperRowView: View {
             }
             Spacer()
             Button(action: onDismiss) {
-                Image(systemName: "xmark")
+                Image(systemName: "trash")
                     .font(.system(size: 10))
             }
             .buttonStyle(.borderless)
-            .help("Dismiss")
+            .help("Move to Trash")
         }
         .padding(.vertical, 4)
+        .contextMenu {
+            if paper.isNew {
+                Button("Mark as Read") {
+                    onToggleRead?()
+                }
+            } else {
+                Button("Mark as Unread") {
+                    onToggleRead?()
+                }
+            }
+        }
     }
 
     private func formattedDate(_ iso8601: String) -> String {
