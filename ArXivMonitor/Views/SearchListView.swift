@@ -12,36 +12,58 @@ struct SearchListView: View {
                 HStack {
                     Label("All Papers", systemImage: "doc.text")
                     Spacer()
-                    let count = appState.unreadCount
-                    if count > 0 {
-                        Text("\(count)")
+                    let total = appState.matchedPapers.count
+                    let unread = appState.unreadCount
+                    if unread > 0 {
+                        Text("\(unread)")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(.purple, in: Capsule())
                     }
+                    Text("\(total)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 }
                 .tag(SidebarSelection.allPapers)
             }
 
             Section("Saved Searches") {
                 ForEach(appState.savedSearches) { search in
-                    HStack {
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(search.color)
+                            .frame(width: 4, height: 20)
+                            .opacity(search.isPaused ? 0.4 : 1.0)
                         Text(search.name)
+                            .foregroundStyle(search.isPaused ? .secondary : .primary)
+                        if search.isPaused {
+                            Image(systemName: "pause.circle")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
-                        let count = appState.papers(for: search.id).filter(\.isNew).count
-                        if count > 0 {
-                            Text("\(count)")
+                        let searchPapers = appState.papers(for: search.id)
+                        let total = searchPapers.count
+                        let unread = searchPapers.filter(\.isNew).count
+                        if unread > 0 {
+                            Text("\(unread)")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
                                 .background(.purple, in: Capsule())
                         }
+                        Text("\(total)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
                     .tag(SidebarSelection.search(search.id))
                     .contextMenu {
+                        Button(search.isPaused ? "Resume" : "Pause") {
+                            appState.togglePause(search.id)
+                        }
                         Button("Edit...") {
                             editingSearch = search
                         }

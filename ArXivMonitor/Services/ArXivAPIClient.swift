@@ -33,16 +33,26 @@ struct ArXivAPIClient {
 
         guard !queryParts.isEmpty else { return nil }
         let separator = search.combineOperator == .or ? " OR " : " AND "
-        let searchQuery = queryParts.joined(separator: separator)
+        var searchQuery = queryParts.joined(separator: separator)
 
-        var components = URLComponents(string: baseURL)
-        components?.queryItems = [
-            URLQueryItem(name: "search_query", value: searchQuery),
-            URLQueryItem(name: "sortBy", value: "lastUpdatedDate"),
-            URLQueryItem(name: "sortOrder", value: "descending"),
-            URLQueryItem(name: "max_results", value: "\(maxResults)")
-        ]
-        return components?.url
+        // For keyword/mixed searches, restrict to past 90 days via submittedDate
+        if !search.isAuthorOnly {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyyMMddHHmm"
+            dateFormatter.timeZone = TimeZone(identifier: "UTC")
+            let ninetyDaysAgo = Calendar.current.date(byAdding: .day, value: -90, to: Date())!
+            let startDate = dateFormatter.string(from: ninetyDaysAgo)
+            let endDate = dateFormatter.string(from: Date())
+            searchQuery = "(\(searchQuery)) AND submittedDate:[\(startDate) TO \(endDate)]"
+        }
+
+        // Build URL manually to preserve literal brackets in submittedDate:[... TO ...]
+        // URLComponents percent-encodes brackets (%5B/%5D) which arXiv does not recognize.
+        guard let encodedQuery = searchQuery.addingPercentEncoding(
+            withAllowedCharacters: .arXivQueryAllowed
+        ) else { return nil }
+        let urlString = "\(baseURL)?search_query=\(encodedQuery)&sortBy=lastUpdatedDate&sortOrder=descending&max_results=\(maxResults)"
+        return URL(string: urlString)
     }
 
     /// Fetch papers for a saved search from the arXiv API.
@@ -76,6 +86,17 @@ struct ArXivAPIClient {
         }
         return value
     }
+}
+
+private extension CharacterSet {
+    /// Characters allowed in the arXiv search_query parameter value.
+    /// Preserves brackets, colons, and parentheses that arXiv expects literally.
+    static let arXivQueryAllowed: CharacterSet = {
+        var set = CharacterSet.urlQueryAllowed
+        set.remove(charactersIn: "&=") // must encode these to avoid breaking query string
+        set.insert(charactersIn: "[]():") // arXiv needs these literally
+        return set
+    }()
 }
 
 enum ArXivError: Error, LocalizedError {

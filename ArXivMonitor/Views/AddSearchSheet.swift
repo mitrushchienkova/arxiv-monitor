@@ -12,6 +12,8 @@ struct AddSearchSheet: View {
         SearchClause(field: .keyword, value: "", scope: .titleAndAbstract)
     ]
     @State private var combineOperator: ClauseCombineOperator = .and
+    @State private var colorHex: String = searchColorPalette[0]
+    @State private var showClauseChangeWarning = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -28,6 +30,23 @@ struct AddSearchSheet: View {
 
             TextField("Name", text: $name, prompt: Text("e.g. Mirror Symmetry papers"))
                 .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Text("Color")
+                Spacer()
+                ColorPicker("", selection: Binding(
+                    get: { Color(hex: colorHex) },
+                    set: { newColor in
+                        if let cgColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                            let r = Int(cgColor.redComponent * 255)
+                            let g = Int(cgColor.greenComponent * 255)
+                            let b = Int(cgColor.blueComponent * 255)
+                            colorHex = String(format: "#%02X%02X%02X", r, g, b)
+                        }
+                    }
+                ))
+                .labelsHidden()
+            }
 
             Text("CLAUSES")
                 .font(.system(size: 11, weight: .semibold))
@@ -69,7 +88,19 @@ struct AddSearchSheet: View {
                 name = search.name
                 clauses = search.clauses
                 combineOperator = search.combineOperator
+                colorHex = search.colorHex
+            } else {
+                let paletteIndex = appState.savedSearches.count % searchColorPalette.count
+                colorHex = searchColorPalette[paletteIndex]
             }
+        }
+        .alert("Change Search Criteria?", isPresented: $showClauseChangeWarning) {
+            Button("Continue", role: .destructive) {
+                confirmSave()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Changing search criteria will remove existing results for this search. Continue?")
         }
     }
 
@@ -132,15 +163,35 @@ struct AddSearchSheet: View {
         let trimmedClauses = clauses.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !trimmedClauses.isEmpty else { return }
 
-        if var existing = editingSearch {
-            existing.name = name
-            existing.clauses = trimmedClauses
-            existing.combineOperator = combineOperator
-            appState.updateSearch(existing)
+        if let existing = editingSearch {
+            var updated = existing
+            updated.name = name
+            updated.clauses = trimmedClauses
+            updated.combineOperator = combineOperator
+            updated.colorHex = colorHex
+
+            if !existing.clausesEqual(to: updated) {
+                showClauseChangeWarning = true
+            } else {
+                appState.updateSearch(updated)
+                dismiss()
+            }
         } else {
-            let search = SavedSearch(name: name, clauses: trimmedClauses, combineOperator: combineOperator)
+            let search = SavedSearch(name: name, clauses: trimmedClauses,
+                                     combineOperator: combineOperator, colorHex: colorHex)
             appState.addSearch(search)
+            dismiss()
         }
+    }
+
+    private func confirmSave() {
+        let trimmedClauses = clauses.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard var existing = editingSearch else { return }
+        existing.name = name
+        existing.clauses = trimmedClauses
+        existing.combineOperator = combineOperator
+        existing.colorHex = colorHex
+        appState.updateSearch(existing)
         dismiss()
     }
 }

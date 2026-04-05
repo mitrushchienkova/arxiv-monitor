@@ -82,6 +82,24 @@ struct MenuBarLabel: View {
         if CommandLine.arguments.contains("--sample-data") {
             appState.loadSampleData()
         }
+        if CommandLine.arguments.contains("--open-window") {
+            showMainWindowDirectly()
+        }
+    }
+
+    private func showMainWindowDirectly() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "arXiv Monitor"
+        window.contentView = NSHostingView(rootView: MainWindowView(appState: appState))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.isReleasedWhenClosed = false
     }
 }
 

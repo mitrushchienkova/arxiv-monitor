@@ -13,7 +13,7 @@ final class ArXivAPIClientTests: XCTestCase {
         let url = ArXivAPIClient.buildQueryURL(for: search)
         XCTAssertNotNil(url)
         let query = url!.absoluteString
-        XCTAssertTrue(query.contains("search_query=cat%3Acs.LG") || query.contains("search_query=cat:cs.LG"),
+        XCTAssertTrue(query.contains("cat%3Acs.LG") || query.contains("cat:cs.LG"),
                        "Query should contain cat:cs.LG, got: \(query)")
         XCTAssertTrue(query.contains("sortBy=lastUpdatedDate"))
         XCTAssertTrue(query.contains("max_results=100"))

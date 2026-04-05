@@ -39,6 +39,7 @@ struct PaperListView: View {
                     ForEach(papers) { paper in
                         PaperRowView(
                             paper: paper,
+                            savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) }
                         )
@@ -48,19 +49,6 @@ struct PaperListView: View {
         }
         .navigationTitle(title)
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                if hasNewPapers {
-                    Button("Mark All as Read") {
-                        switch selection {
-                        case .allPapers:
-                            appState.dismissAll()
-                        case .search(let id):
-                            appState.markAllRead(for: id)
-                        }
-                    }
-                    .help("Mark all papers in this view as read")
-                }
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { appState.runFetchCycle() }) {
                     if appState.isFetching {
@@ -72,6 +60,19 @@ struct PaperListView: View {
                 }
                 .disabled(appState.isFetching)
                 .help("Refresh now")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                if hasNewPapers {
+                    Button("Mark All as Read") {
+                        switch selection {
+                        case .allPapers:
+                            appState.dismissAll()
+                        case .search(let id):
+                            appState.markAllRead(for: id)
+                        }
+                    }
+                    .help("Mark all papers in this view as read")
+                }
             }
         }
     }

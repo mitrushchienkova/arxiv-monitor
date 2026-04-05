@@ -23,10 +23,18 @@
 		A1000014000000000000000E /* AddSearchSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014000000000000000E; };
 		A1000015000000000000000F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015000000000000000F; };
 		A10000160000000000000010 /* ArXivMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000010; };
+		B10000010000000000000001 /* ArXivMonitorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000010000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		A30000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A50000010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A40000010000000000000001;
+			remoteInfo = ArXivMonitor;
+		};
+		B30000010000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A50000010000000000000001 /* Project object */;
 			proxyType = 1;
@@ -56,6 +64,8 @@
 		A20000180000000000000012 /* ArXivMonitor.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ArXivMonitor.entitlements; sourceTree = "<group>"; };
 		A20000190000000000000013 /* ArXivMonitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ArXivMonitor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000020000000000000001A /* ArXivMonitorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArXivMonitorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000010000000000000001 /* ArXivMonitorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArXivMonitorUITests.swift; sourceTree = "<group>"; };
+		B20000020000000000000002 /* ArXivMonitorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArXivMonitorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +83,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B60000010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -81,6 +98,7 @@
 			children = (
 				A70000020000000000000002 /* ArXivMonitor */,
 				A70000060000000000000006 /* ArXivMonitorTests */,
+				B70000010000000000000001 /* ArXivMonitorUITests */,
 				A70000070000000000000007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -141,11 +159,20 @@
 			path = ArXivMonitorTests;
 			sourceTree = "<group>";
 		};
+		B70000010000000000000001 /* ArXivMonitorUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B20000010000000000000001 /* ArXivMonitorUITests.swift */,
+			);
+			path = ArXivMonitorUITests;
+			sourceTree = "<group>";
+		};
 		A70000070000000000000007 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				A20000190000000000000013 /* ArXivMonitor.app */,
 				A2000020000000000000001A /* ArXivMonitorTests.xctest */,
+				B20000020000000000000002 /* ArXivMonitorUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -186,6 +213,23 @@
 			productReference = A2000020000000000000001A /* ArXivMonitorTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B40000010000000000000001 /* ArXivMonitorUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B80000010000000000000001 /* Build configuration list for PBXNativeTarget "ArXivMonitorUITests" */;
+			buildPhases = (
+				B90000010000000000000001 /* Sources */,
+				B60000010000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BA0000010000000000000001 /* PBXTargetDependency */,
+			);
+			name = ArXivMonitorUITests;
+			productName = ArXivMonitorUITests;
+			productReference = B20000020000000000000002 /* ArXivMonitorUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -211,6 +255,7 @@
 			targets = (
 				A40000010000000000000001 /* ArXivMonitor */,
 				A40000020000000000000002 /* ArXivMonitorTests */,
+				B40000010000000000000001 /* ArXivMonitorUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -246,6 +291,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B90000010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000010000000000000001 /* ArXivMonitorUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -253,6 +306,11 @@
 			isa = PBXTargetDependency;
 			target = A40000010000000000000001 /* ArXivMonitor */;
 			targetProxy = A30000010000000000000001 /* PBXContainerItemProxy */;
+		};
+		BA0000010000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A40000010000000000000001 /* ArXivMonitor */;
+			targetProxy = B30000010000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -387,6 +445,38 @@
 			};
 			name = Release;
 		};
+		BB0000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.arxivmonitor.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ArXivMonitor;
+			};
+			name = Debug;
+		};
+		BB0000020000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.arxivmonitor.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ArXivMonitor;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -413,6 +503,15 @@
 			buildConfigurations = (
 				AB0000050000000000000005 /* Debug */,
 				AB0000060000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B80000010000000000000001 /* Build configuration list for PBXNativeTarget "ArXivMonitorUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB0000010000000000000001 /* Debug */,
+				BB0000020000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

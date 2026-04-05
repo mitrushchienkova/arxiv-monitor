@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum SearchField: String, Codable, CaseIterable {
     case keyword, category, author
@@ -30,20 +31,37 @@ enum ClauseCombineOperator: String, Codable, CaseIterable {
     case and, or
 }
 
+/// Default palette for auto-assigning colors to new searches.
+let searchColorPalette: [String] = [
+    "#5E5CE6", // indigo
+    "#30B0C7", // teal
+    "#AC4FC6", // purple
+    "#FF6482", // pink
+    "#FF9F0A", // orange
+    "#FFD60A", // yellow
+    "#32D74B", // green
+    "#0A84FF", // blue
+]
+
 struct SavedSearch: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
     var clauses: [SearchClause]
     var combineOperator: ClauseCombineOperator
     var lastQueriedAt: String?
+    var colorHex: String
+    var isPaused: Bool
 
     init(id: UUID = UUID(), name: String, clauses: [SearchClause],
-         combineOperator: ClauseCombineOperator = .and, lastQueriedAt: String? = nil) {
+         combineOperator: ClauseCombineOperator = .and, lastQueriedAt: String? = nil,
+         colorHex: String = searchColorPalette[0], isPaused: Bool = false) {
         self.id = id
         self.name = name
         self.clauses = clauses
         self.combineOperator = combineOperator
         self.lastQueriedAt = lastQueriedAt
+        self.colorHex = colorHex
+        self.isPaused = isPaused
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +71,18 @@ struct SavedSearch: Codable, Identifiable, Hashable {
         clauses = try container.decode([SearchClause].self, forKey: .clauses)
         combineOperator = try container.decodeIfPresent(ClauseCombineOperator.self, forKey: .combineOperator) ?? .and
         lastQueriedAt = try container.decodeIfPresent(String.self, forKey: .lastQueriedAt)
+        colorHex = try container.decodeIfPresent(String.self, forKey: .colorHex) ?? searchColorPalette[0]
+        isPaused = try container.decodeIfPresent(Bool.self, forKey: .isPaused) ?? false
+    }
+
+    /// True when every clause is an author clause (no keywords or categories).
+    var isAuthorOnly: Bool {
+        !clauses.isEmpty && clauses.allSatisfy { $0.field == .author }
+    }
+
+    /// SwiftUI Color from the persisted hex string.
+    var color: Color {
+        Color(hex: colorHex)
     }
 
     static func == (lhs: SavedSearch, rhs: SavedSearch) -> Bool {
@@ -79,5 +109,19 @@ struct SavedSearch: Codable, Identifiable, Hashable {
             return (a.scope?.rawValue ?? "") < (b.scope?.rawValue ?? "")
         }
         return lhs == rhs
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let scanner = Scanner(string: hex)
+        var rgbValue: UInt64 = 0
+        scanner.scanHexInt64(&rgbValue)
+        self.init(
+            red: Double((rgbValue & 0xFF0000) >> 16) / 255.0,
+            green: Double((rgbValue & 0x00FF00) >> 8) / 255.0,
+            blue: Double(rgbValue & 0x0000FF) / 255.0
+        )
     }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PaperRowView: View {
     let paper: MatchedPaper
+    var savedSearches: [SavedSearch] = []
     let onOpen: () -> Void
     let onDismiss: () -> Void
 
@@ -47,6 +48,18 @@ struct PaperRowView: View {
                         Text("Updated: \(formattedDate(paper.updatedAt))")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
+                    }
+                    if !savedSearches.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(paper.matchedSearchIDs, id: \.self) { searchID in
+                                if let search = savedSearches.first(where: { $0.id == searchID }) {
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(search.color)
+                                        .frame(width: 8, height: 8)
+                                        .help(search.name)
+                                }
+                            }
+                        }
                     }
                 }
                 Spacer()

@@ -160,6 +160,12 @@ final class AppState: ObservableObject {
         save()
     }
 
+    func togglePause(_ searchID: UUID) {
+        guard let index = savedSearches.firstIndex(where: { $0.id == searchID }) else { return }
+        savedSearches[index].isPaused.toggle()
+        save()
+    }
+
     /// Remove a search ID from all papers; remove papers with empty matchedSearchIDs.
     private func scrubSearchID(_ searchID: UUID) {
         var toRemove: [String] = []
@@ -245,6 +251,7 @@ final class AppState: ObservableObject {
         let searchesToFetch: [SavedSearch]
         if staleOnly {
             searchesToFetch = savedSearches.filter { search in
+                guard !search.isPaused else { return false }
                 guard let lastQueried = search.lastQueriedAt,
                       let date = formatter.date(from: lastQueried) else {
                     return true
@@ -252,7 +259,7 @@ final class AppState: ObservableObject {
                 return date < threshold
             }
         } else {
-            searchesToFetch = savedSearches
+            searchesToFetch = savedSearches.filter { !$0.isPaused }
         }
 
         guard !searchesToFetch.isEmpty else {
@@ -272,8 +279,6 @@ final class AppState: ObservableObject {
         var pendingSearchIDs: [String: Set<UUID>] = [:]
         var failedSearchIDs: Set<UUID> = []
         var successfulTimestamps: [UUID: String] = [:]
-
-        let ninetyDaysAgo = Calendar.current.date(byAdding: .day, value: -90, to: Date())!
 
         for (idx, search) in searchesToFetch.enumerated() {
             if idx > 0 {
@@ -335,13 +340,6 @@ final class AppState: ObservableObject {
                         pendingNew[paperID] = pending
                     } else {
                         // New paper not in history
-                        // Skip stale papers (>90 days, not revised) using parsed dates
-                        if let pubDate = formatter.date(from: paper.publishedAt),
-                           pubDate < ninetyDaysAgo,
-                           paper.updatedAt == paper.publishedAt {
-                            continue
-                        }
-
                         pendingNew[paperID] = MatchedPaper(
                             id: paper.id,
                             title: paper.title,
@@ -402,9 +400,6 @@ final class AppState: ObservableObject {
         lastCycleAt = cycleStartedAt
         lastCycleFailedSearchIDs = Array(failedSearchIDs)
 
-        // Prune old papers (>90 days based on foundAt)
-        pruneOldPapers(before: ninetyDaysAgo)
-
         // Persist
         save()
 
@@ -420,19 +415,6 @@ final class AppState: ObservableObject {
 
         isFetching = false
         fetchProgress = nil
-    }
-
-    private func pruneOldPapers(before cutoff: Date) {
-        let formatter = ISO8601DateFormatter()
-        var toRemove: [String] = []
-        for (id, paper) in matchedPapers {
-            if let foundDate = formatter.date(from: paper.foundAt), foundDate < cutoff {
-                toRemove.append(id)
-            }
-        }
-        for id in toRemove {
-            matchedPapers.removeValue(forKey: id)
-        }
     }
 
     // MARK: - Launch at Login
@@ -458,15 +440,24 @@ final class AppState: ObservableObject {
         let search1 = SavedSearch(
             name: "Mirror Symmetry",
             clauses: [SearchClause(field: .keyword, value: "Mirror Symmetry", scope: .titleAndAbstract)],
-            lastQueriedAt: now
+            lastQueriedAt: now,
+            colorHex: searchColorPalette[0]
         )
         let search2 = SavedSearch(
             name: "Gromov-Witten",
             clauses: [SearchClause(field: .keyword, value: "Gromov-Witten", scope: .titleAndAbstract)],
-            lastQueriedAt: now
+            lastQueriedAt: now,
+            colorHex: searchColorPalette[1]
+        )
+        let search3 = SavedSearch(
+            name: "Derived Categories",
+            clauses: [SearchClause(field: .keyword, value: "derived categories", scope: .titleAndAbstract)],
+            lastQueriedAt: now,
+            colorHex: searchColorPalette[2],
+            isPaused: true
         )
 
-        savedSearches = [search1, search2]
+        savedSearches = [search1, search2, search3]
         matchedPapers = [
             "2602.04232": MatchedPaper(
                 id: "2602.04232",
@@ -504,6 +495,19 @@ final class AppState: ObservableObject {
                 updatedAt: "2026-02-04T18:52:46Z",
                 link: "https://arxiv.org/abs/2602.04866",
                 matchedSearchIDs: [search1.id],
+                foundAt: now,
+                isNew: false
+            ),
+            "2602.09100": MatchedPaper(
+                id: "2602.09100",
+                title: "Derived categories of toric varieties and their mirrors",
+                authors: "Kontsevich, M., Soibelman, Y.",
+                primaryCategory: "math.AG",
+                categories: ["math.AG", "math.CT"],
+                publishedAt: "2026-02-10T12:00:00Z",
+                updatedAt: "2026-02-10T12:00:00Z",
+                link: "https://arxiv.org/abs/2602.09100",
+                matchedSearchIDs: [search3.id, search1.id],
                 foundAt: now,
                 isNew: false
             )

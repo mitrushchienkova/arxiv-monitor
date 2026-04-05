@@ -171,6 +171,7 @@ struct MenuBarPopover: View {
                     ForEach(newPapers) { paper in
                         PaperRowView(
                             paper: paper,
+                            savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) }
                         )
@@ -192,6 +193,7 @@ struct MenuBarPopover: View {
                     ForEach(Array(historyPapers)) { paper in
                         PaperRowView(
                             paper: paper,
+                            savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) }
                         )
