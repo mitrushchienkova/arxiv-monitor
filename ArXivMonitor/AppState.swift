@@ -1,7 +1,6 @@
 import Foundation
 import SwiftUI
 import ServiceManagement
-import UniformTypeIdentifiers
 import UserNotifications
 
 /// Current data schema version. Increment when making breaking changes to PersistedData.
@@ -57,6 +56,9 @@ final class AppState: ObservableObject {
 
     /// Retained reference for the notification delegate (set by ArXivMonitorApp).
     var notificationDelegate: AnyObject?
+
+    /// When set, exportData() writes here instead of showing NSSavePanel. For testing only.
+    var testExportURL: URL?
 
     // MARK: - Settings (UserDefaults)
     @AppStorage("soundName") var soundName: String = "paperFlip"
@@ -183,7 +185,7 @@ final class AppState: ObservableObject {
         )
     }
 
-    private func encodedPersistedData() throws -> Data {
+    func encodedPersistedData() throws -> Data {
         try JSONEncoder().encode(makePersistedData())
     }
 
@@ -207,31 +209,40 @@ final class AppState: ObservableObject {
 
     func exportData() {
         exportStatusMessage = nil
-        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        // Test mode: bypass NSSavePanel (it can't appear in LSUIElement apps under XCUITest)
+        if let testURL = testExportURL {
+            finishExport(to: testURL)
+            return
+        }
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "ArXivMonitor-data.json"
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
 
-        let window = NSApplication.shared.windows.first(where: { $0.isVisible })
-        if let window {
-            panel.beginSheetModal(for: window) { [weak self] response in
+        // Find a titled, visible window (the Settings window) for sheet presentation.
+        // Avoid the MenuBarExtra popover which is visible but can't host sheets.
+        let hostWindow = NSApplication.shared.windows.first {
+            $0.isVisible && $0.styleMask.contains(.titled) && $0.styleMask.contains(.closable)
+        }
+
+        if let hostWindow {
+            panel.beginSheetModal(for: hostWindow) { [weak self] response in
                 guard response == .OK, let url = panel.url else { return }
                 Task { @MainActor in
                     self?.finishExport(to: url)
                 }
             }
-            return
+        } else {
+            // Fallback for contexts without a visible titled window
+            NSApplication.shared.setActivationPolicy(.regular)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            let response = panel.runModal()
+            NSApplication.shared.setActivationPolicy(.accessory)
+            guard response == .OK, let url = panel.url else { return }
+            finishExport(to: url)
         }
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        finishExport(to: url)
-    }
-
-    func exportData(to url: URL) throws {
-        let data = try encodedPersistedData()
-        try data.write(to: url, options: .atomic)
     }
 
     private func finishExport(to url: URL) {
@@ -242,6 +253,11 @@ final class AppState: ObservableObject {
             exportStatusMessage = "Export failed: \(error.localizedDescription)"
             print("[ArXivMonitor] Export failed: \(error)")
         }
+    }
+
+    func exportData(to url: URL) throws {
+        let data = try encodedPersistedData()
+        try data.write(to: url, options: .atomic)
     }
 
     func refreshNotificationAuthorizationStatus(requestIfNeeded: Bool = false) async {

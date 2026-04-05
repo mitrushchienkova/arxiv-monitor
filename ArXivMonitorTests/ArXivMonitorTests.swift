@@ -547,6 +547,27 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(persisted.savedSearches.first?.name, "Export Search")
         XCTAssertEqual(persisted.matchedPapers["paper-001"]?.title, "Exported Paper")
     }
+
+    @MainActor
+    func testExportDataButtonFlowWritesFileViaTestURL() throws {
+        let state = AppState(dataDirectoryURL: tempDir)
+        state.loadSampleData()
+
+        let exportURL = tempDir.appendingPathComponent("button-export.json")
+        state.testExportURL = exportURL
+
+        // This calls the same code path as the "Export Data..." button
+        state.exportData()
+
+        // Verify file was written
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportURL.path), "Export file should be created")
+
+        let data = try Data(contentsOf: exportURL)
+        let persisted = try JSONDecoder().decode(PersistedData.self, from: data)
+        XCTAssertEqual(persisted.savedSearches.count, 3, "Should export 3 sample searches")
+        XCTAssertEqual(persisted.matchedPapers.count, 4, "Should export 4 sample papers")
+        XCTAssertEqual(state.exportStatusMessage, "Exported button-export.json.")
+    }
 }
 
 final class PollSchedulerTests: XCTestCase {

@@ -229,4 +229,5 @@ final class ArXivMonitorUITests: XCTestCase {
         let refreshButton = mainWindow.buttons["Refresh"]
         XCTAssertTrue(refreshButton.waitForExistence(timeout: 3), "Refresh button should exist in toolbar")
     }
+
 }

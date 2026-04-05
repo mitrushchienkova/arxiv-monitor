@@ -6,7 +6,7 @@ struct ArXivAPIClient {
 
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForRequest = 30
         return URLSession(configuration: config)
     }()
 
