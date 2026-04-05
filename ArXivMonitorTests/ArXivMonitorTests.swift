@@ -250,10 +250,18 @@ final class AppStateTests: XCTestCase {
         super.setUp()
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ArXivMonitorTests-\(UUID().uuidString)")
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "badgeStyle")
+        defaults.removeObject(forKey: "soundName")
+        defaults.removeObject(forKey: "launchAtLogin")
     }
 
     override func tearDown() {
         try? FileManager.default.removeItem(at: tempDir)
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "badgeStyle")
+        defaults.removeObject(forKey: "soundName")
+        defaults.removeObject(forKey: "launchAtLogin")
         super.tearDown()
     }
 
@@ -495,6 +503,49 @@ final class AppStateTests: XCTestCase {
         let persisted = try! JSONDecoder().decode(PersistedData.self, from: data)
         XCTAssertEqual(persisted.dataVersion, 1)
         XCTAssertTrue(persisted.savedSearches.isEmpty)
+    }
+
+    func testLegacyDotBadgePreferenceMigratesToNone() {
+        UserDefaults.standard.set("dot", forKey: "badgeStyle")
+
+        let state = AppState(dataDirectoryURL: tempDir)
+
+        XCTAssertEqual(state.badgeStyle, "none")
+    }
+
+    func testExportDataWritesCurrentStateWithoutBackingDataFile() throws {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let search = SavedSearch(
+            name: "Export Search",
+            clauses: [SearchClause(field: .keyword, value: "diffusion", scope: .title)]
+        )
+        let paper = MatchedPaper(
+            id: "paper-001",
+            title: "Exported Paper",
+            authors: "A. Author",
+            primaryCategory: "cs.AI",
+            categories: ["cs.AI"],
+            publishedAt: "2024-01-01T00:00:00Z",
+            updatedAt: "2024-01-01T00:00:00Z",
+            link: "https://arxiv.org/abs/paper-001",
+            matchedSearchIDs: [search.id],
+            foundAt: "2024-01-01T00:00:00Z",
+            isNew: true
+        )
+
+        state.savedSearches = [search]
+        state.matchedPapers = [paper.id: paper]
+
+        let exportURL = tempDir.appendingPathComponent("export.json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportURL.path))
+
+        try state.exportData(to: exportURL)
+
+        let exportedData = try Data(contentsOf: exportURL)
+        let persisted = try JSONDecoder().decode(PersistedData.self, from: exportedData)
+        XCTAssertEqual(persisted.savedSearches.count, 1)
+        XCTAssertEqual(persisted.savedSearches.first?.name, "Export Search")
+        XCTAssertEqual(persisted.matchedPapers["paper-001"]?.title, "Exported Paper")
     }
 }
 

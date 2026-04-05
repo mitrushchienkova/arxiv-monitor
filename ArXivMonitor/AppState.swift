@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import ServiceManagement
 import UniformTypeIdentifiers
+import UserNotifications
 
 /// Current data schema version. Increment when making breaking changes to PersistedData.
 let currentDataVersion = 1
@@ -51,12 +52,14 @@ final class AppState: ObservableObject {
     @Published var lastCycleFailedSearchIDs: [UUID] = []
     @Published var isFetching = false
     @Published var fetchProgress: String?
+    @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
+    @Published var exportStatusMessage: String?
 
     /// Retained reference for the notification delegate (set by ArXivMonitorApp).
     var notificationDelegate: AnyObject?
 
     // MARK: - Settings (UserDefaults)
-    @AppStorage("soundName") var soundName: String = "default"
+    @AppStorage("soundName") var soundName: String = "paperFlip"
     @AppStorage("badgeStyle") var badgeStyle: String = "count"
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false {
         didSet {
@@ -120,9 +123,26 @@ final class AppState: ObservableObject {
         } catch {
             print("[ArXivMonitor] Failed to create app directory: \(error)")
         }
+        normalizeStoredPreferences()
         load()
         NotificationService.shared.registerActions()
         performBackupIfNeeded()
+        let hasSavedSearches = !savedSearches.isEmpty
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshNotificationAuthorizationStatus(requestIfNeeded: hasSavedSearches)
+        }
+    }
+
+    private func normalizeStoredPreferences() {
+        if badgeStyle == "dot" {
+            badgeStyle = "none"
+        }
+
+        let supportedSounds: Set<String> = ["paperFlip", "default", "none"]
+        if !supportedSounds.contains(soundName) {
+            soundName = "paperFlip"
+        }
     }
 
     private func load() {
@@ -154,15 +174,22 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func save() {
-        let persisted = PersistedData(
+    private func makePersistedData() -> PersistedData {
+        PersistedData(
             savedSearches: savedSearches,
             matchedPapers: matchedPapers,
             lastCycleAt: lastCycleAt,
             lastCycleFailedSearchIDs: lastCycleFailedSearchIDs
         )
+    }
+
+    private func encodedPersistedData() throws -> Data {
+        try JSONEncoder().encode(makePersistedData())
+    }
+
+    private func save() {
         do {
-            let data = try JSONEncoder().encode(persisted)
+            let data = try encodedPersistedData()
             try data.write(to: dataFileURL, options: .atomic)
         } catch {
             print("[ArXivMonitor] Failed to save data.json: \(error)")
@@ -179,17 +206,65 @@ final class AppState: ObservableObject {
     }
 
     func exportData() {
+        exportStatusMessage = nil
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "ArXivMonitor-data.json"
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
+
+        if let window = NSApplication.shared.keyWindow {
+            panel.beginSheetModal(for: window) { [weak self] response in
+                guard response == .OK, let url = panel.url else { return }
+                Task { @MainActor in
+                    self?.finishExport(to: url)
+                }
+            }
+            return
+        }
+
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        finishExport(to: url)
+    }
+
+    func exportData(to url: URL) throws {
+        let data = try encodedPersistedData()
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func finishExport(to url: URL) {
         do {
-            let data = try Data(contentsOf: dataFileURL)
-            try data.write(to: url, options: .atomic)
+            try exportData(to: url)
+            exportStatusMessage = "Exported \(url.lastPathComponent)."
         } catch {
+            exportStatusMessage = "Export failed: \(error.localizedDescription)"
             print("[ArXivMonitor] Export failed: \(error)")
         }
+    }
+
+    func refreshNotificationAuthorizationStatus(requestIfNeeded: Bool = false) async {
+        let currentStatus = await NotificationService.shared.authorizationStatus()
+        notificationAuthorizationStatus = currentStatus
+
+        guard requestIfNeeded, currentStatus == .notDetermined else { return }
+
+        _ = await NotificationService.shared.requestPermission()
+        notificationAuthorizationStatus = await NotificationService.shared.authorizationStatus()
+    }
+
+    func enableNotifications() {
+        Task {
+            await refreshNotificationAuthorizationStatus(requestIfNeeded: true)
+        }
+    }
+
+    func openNotificationSettings() {
+        NotificationService.shared.openSystemNotificationSettings()
+    }
+
+    func sendTestNotification() {
+        NotificationService.shared.sendTestNotification(soundName: soundName)
     }
 
     private func performBackupIfNeeded() {
@@ -264,7 +339,9 @@ final class AppState: ObservableObject {
 
         // Request notification permission on first search creation
         if savedSearches.count == 1 {
-            NotificationService.shared.requestPermission()
+            Task {
+                await refreshNotificationAuthorizationStatus(requestIfNeeded: true)
+            }
         }
     }
 

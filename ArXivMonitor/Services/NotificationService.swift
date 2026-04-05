@@ -1,19 +1,33 @@
+import AppKit
 import Foundation
 import UserNotifications
 
 final class NotificationService {
     static let shared = NotificationService()
     private let center = UNUserNotificationCenter.current()
+    private let authorizationOptions: UNAuthorizationOptions = [.alert, .sound, .badge]
+    private let paperFlipSoundName = UNNotificationSoundName(rawValue: "paper-flip.aiff")
 
     private init() {}
 
     /// Request notification permission. Call on first saved search creation.
-    func requestPermission() {
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error = error {
-                print("[ArXivMonitor] Notification permission error: \(error)")
+    func requestPermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            center.requestAuthorization(options: authorizationOptions) { granted, error in
+                if let error = error {
+                    print("[ArXivMonitor] Notification permission error: \(error)")
+                }
+                print("[ArXivMonitor] Notification permission granted: \(granted)")
+                continuation.resume(returning: granted)
             }
-            print("[ArXivMonitor] Notification permission granted: \(granted)")
+        }
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            center.getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus)
+            }
         }
     }
 
@@ -38,6 +52,32 @@ final class NotificationService {
         center.setNotificationCategories([category])
     }
 
+    func openSystemNotificationSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.notifications",
+            "x-apple.systempreferences:"
+        ]
+
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else { continue }
+            if NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+
+    func sendTestNotification(soundName: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "arXiv Monitor"
+        content.subtitle = "Test Notification"
+        content.body = "Notifications are enabled and ready for new papers."
+        content.threadIdentifier = "arxiv-monitor"
+        content.sound = notificationSound(named: soundName)
+
+        postNotification(content, identifierPrefix: "arxiv-test")
+    }
+
     /// Post a notification about new papers discovered in this fetch cycle.
     func notifyNewPapers(_ papers: [MatchedPaper], soundName: String) {
         guard !papers.isEmpty else { return }
@@ -48,26 +88,66 @@ final class NotificationService {
         content.body = papers.first?.title ?? ""
         content.threadIdentifier = "arxiv-monitor"
         content.categoryIdentifier = "NEW_PAPERS"
+        content.sound = notificationSound(named: soundName)
 
-        switch soundName {
-        case "default":
-            content.sound = .default
-        case "none":
-            content.sound = nil
-        default:
-            content.sound = .default
-        }
+        postNotification(content, identifierPrefix: "arxiv-new-papers")
+    }
 
-        let request = UNNotificationRequest(
-            identifier: "arxiv-new-papers-\(UUID().uuidString)",
-            content: content,
-            trigger: nil // deliver immediately
-        )
+    private func postNotification(_ content: UNMutableNotificationContent, identifierPrefix: String) {
+        Task {
+            let initialStatus = await authorizationStatus()
+            let resolvedStatus: UNAuthorizationStatus
 
-        center.add(request) { error in
-            if let error = error {
-                print("[ArXivMonitor] Failed to post notification: \(error)")
+            if initialStatus == .notDetermined {
+                _ = await requestPermission()
+                resolvedStatus = await authorizationStatus()
+            } else {
+                resolvedStatus = initialStatus
             }
+
+            guard Self.canDeliverNotifications(for: resolvedStatus) else {
+                print("[ArXivMonitor] Notification skipped. Authorization status: \(resolvedStatus.rawValue)")
+                return
+            }
+
+            let request = UNNotificationRequest(
+                identifier: "\(identifierPrefix)-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+
+            await add(request)
+        }
+    }
+
+    private func add(_ request: UNNotificationRequest) async {
+        await withCheckedContinuation { continuation in
+            center.add(request) { error in
+                if let error = error {
+                    print("[ArXivMonitor] Failed to post notification: \(error)")
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    private func notificationSound(named soundName: String) -> UNNotificationSound? {
+        switch soundName {
+        case "paperFlip":
+            return .init(named: paperFlipSoundName)
+        case "none":
+            return nil
+        default:
+            return .default
+        }
+    }
+
+    private static func canDeliverNotifications(for status: UNAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .provisional:
+            return true
+        default:
+            return false
         }
     }
 }

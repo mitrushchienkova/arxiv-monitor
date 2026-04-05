@@ -33,7 +33,7 @@ struct MenuBarLabel: View {
         ZStack(alignment: .topTrailing) {
             Image(systemName: "doc.text.magnifyingglass")
 
-            if appState.unreadCount > 0 && appState.badgeStyle != "none" {
+            if appState.unreadCount > 0 && appState.badgeStyle == "count" {
                 badgeView
                     .offset(x: 6, y: -4)
             }
@@ -47,23 +47,13 @@ struct MenuBarLabel: View {
         }
     }
 
-    @ViewBuilder
     private var badgeView: some View {
-        switch appState.badgeStyle {
-        case "dot":
-            Circle()
-                .fill(.red)
-                .frame(width: 8, height: 8)
-        case "count":
-            Text("\(appState.unreadCount)")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 3)
-                .padding(.vertical, 1)
-                .background(.red, in: Capsule())
-        default:
-            EmptyView()
-        }
+        Text("\(appState.unreadCount)")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 1)
+            .background(.red, in: Capsule())
     }
 
     private func setupScheduler() {
