@@ -2,15 +2,27 @@ import SwiftUI
 
 struct SearchListView: View {
     @ObservedObject var appState: AppState
-    @Binding var selectedSearchID: UUID?
+    @Binding var selection: SidebarSelection?
     @State private var showAddSheet = false
     @State private var editingSearch: SavedSearch?
 
     var body: some View {
-        List(selection: $selectedSearchID) {
+        List(selection: $selection) {
             Section {
-                Label("All Papers", systemImage: "doc.text")
-                    .tag(nil as UUID?)
+                HStack {
+                    Label("All Papers", systemImage: "doc.text")
+                    Spacer()
+                    let count = appState.unreadCount
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(.purple, in: Capsule())
+                    }
+                }
+                .tag(SidebarSelection.allPapers)
             }
 
             Section("Saved Searches") {
@@ -28,7 +40,7 @@ struct SearchListView: View {
                                 .background(.purple, in: Capsule())
                         }
                     }
-                    .tag(search.id as UUID?)
+                    .tag(SidebarSelection.search(search.id))
                     .contextMenu {
                         Button("Edit...") {
                             editingSearch = search

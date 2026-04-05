@@ -2,22 +2,28 @@ import SwiftUI
 
 struct PaperListView: View {
     @ObservedObject var appState: AppState
-    let searchID: UUID?
+    let selection: SidebarSelection
 
     private var papers: [MatchedPaper] {
-        if let searchID = searchID {
-            return appState.papers(for: searchID)
-        } else {
+        switch selection {
+        case .allPapers:
             return appState.allPapersSorted
+        case .search(let id):
+            return appState.papers(for: id)
         }
     }
 
     private var title: String {
-        if let searchID = searchID,
-           let search = appState.savedSearches.first(where: { $0.id == searchID }) {
-            return search.name
+        switch selection {
+        case .allPapers:
+            return "All Papers"
+        case .search(let id):
+            return appState.savedSearches.first(where: { $0.id == id })?.name ?? "Search"
         }
-        return "All Papers"
+    }
+
+    private var hasNewPapers: Bool {
+        papers.contains(where: \.isNew)
     }
 
     var body: some View {
@@ -42,6 +48,19 @@ struct PaperListView: View {
         }
         .navigationTitle(title)
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                if hasNewPapers {
+                    Button("Mark All as Read") {
+                        switch selection {
+                        case .allPapers:
+                            appState.dismissAll()
+                        case .search(let id):
+                            appState.markAllRead(for: id)
+                        }
+                    }
+                    .help("Mark all papers in this view as read")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { appState.runFetchCycle() }) {
                     if appState.isFetching {

@@ -199,6 +199,14 @@ final class AppState: ObservableObject {
         save()
     }
 
+    func markAllRead(for searchID: UUID) {
+        for (id, var paper) in matchedPapers where paper.isNew && paper.matchedSearchIDs.contains(searchID) {
+            paper.isNew = false
+            matchedPapers[id] = paper
+        }
+        save()
+    }
+
     private func markRead(paperID: String) {
         guard var paper = matchedPapers[paperID], paper.isNew else { return }
         paper.isNew = false
@@ -323,10 +331,7 @@ final class AppState: ObservableObject {
                         if !pending.matchedSearchIDs.contains(search.id) {
                             pending.matchedSearchIDs.append(search.id)
                         }
-                        // Promote to isNew if this search is not baseline
-                        if !baselineSearchIDs.contains(search.id) {
-                            pending.isNew = true
-                        }
+                        pending.isNew = true
                         pendingNew[paperID] = pending
                     } else {
                         // New paper not in history
@@ -348,7 +353,7 @@ final class AppState: ObservableObject {
                             link: paper.link,
                             matchedSearchIDs: [search.id],
                             foundAt: fetchTime,
-                            isNew: !baselineSearchIDs.contains(search.id)
+                            isNew: true
                         )
                     }
                 }
@@ -403,8 +408,10 @@ final class AppState: ObservableObject {
         // Persist
         save()
 
-        // Notify about new papers from this cycle
-        let newThisCycle = Array(pendingNew.values.filter(\.isNew)) + Array(pendingRevisions.values.filter(\.isNew))
+        // Notify about new papers from this cycle (skip papers that only matched baseline searches)
+        let newThisCycle = (Array(pendingNew.values) + Array(pendingRevisions.values)).filter { paper in
+            paper.isNew && paper.matchedSearchIDs.contains(where: { !baselineSearchIDs.contains($0) })
+        }
         if !newThisCycle.isEmpty {
             NotificationService.shared.notifyNewPapers(newThisCycle, soundName: soundName)
         }
