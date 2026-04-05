@@ -192,8 +192,8 @@ struct AddSearchSheet: View {
 
     private func placeholderFor(_ field: SearchField) -> String {
         switch field {
-        case .keyword: return "e.g. flow matching"
-        case .category: return "e.g. cs.LG"
+        case .keyword: return "e.g. mirror symmetry, SYZ"
+        case .category: return "e.g. math.AG, hep-th, math.SG"
         case .author: return "e.g. Hinton"
         }
     }

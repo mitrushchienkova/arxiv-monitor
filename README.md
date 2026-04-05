@@ -10,12 +10,13 @@ Built with SwiftUI. Zero external dependencies -- Apple frameworks only. Require
 
 Create independent saved searches to monitor arXiv for specific topics. Each search consists of one or more clauses combined with AND/OR logic:
 
-- **Keyword** -- match against title, abstract, or both
-- **Category** -- filter by arXiv category (e.g. `math.AG`, `cs.LG`, `hep-th`)
+- **Keyword** -- match against title, abstract, or both. Comma-separated values are ORed (e.g. `mirror symmetry, SYZ`)
+- **Category** -- filter by arXiv category. Comma-separated values are ORed (e.g. `math.AG, hep-th, math.SG`)
 - **Author** -- search by author name
 
 Examples:
 - "Gromov-Witten" (keyword in title + abstract)
+- `mirror symmetry, SYZ` in categories `math.AG, hep-th, math.SG` (keyword AND category, with multiple values ORed within each)
 - cs.LG papers by Hinton (category AND author)
 - "flow matching" in title (keyword, title only)
 

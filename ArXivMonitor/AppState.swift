@@ -214,7 +214,8 @@ final class AppState: ObservableObject {
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
 
-        if let window = NSApplication.shared.keyWindow {
+        let window = NSApplication.shared.windows.first(where: { $0.isVisible })
+        if let window {
             panel.beginSheetModal(for: window) { [weak self] response in
                 guard response == .OK, let url = panel.url else { return }
                 Task { @MainActor in

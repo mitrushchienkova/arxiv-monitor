@@ -15,19 +15,38 @@ struct ArXivAPIClient {
         let queryParts = search.clauses.map { clause -> String in
             switch clause.field {
             case .category:
-                return "cat:\(escapeQuery(clause.value))"
+                let cats = clause.value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                if cats.count > 1 {
+                    let parts = cats.map { "cat:\($0)" }
+                    return "(\(parts.joined(separator: " OR ")))"
+                }
+                return "cat:\(escapeQuery(clause.value.trimmingCharacters(in: .whitespaces)))"
             case .author:
                 return "au:\(escapeQuery(clause.value))"
             case .keyword:
-                let escaped = escapeQuery(clause.value)
-                switch clause.scope ?? .titleAndAbstract {
-                case .title:
-                    return "ti:\(escaped)"
-                case .abstract:
-                    return "abs:\(escaped)"
-                case .titleAndAbstract:
-                    return "(ti:\(escaped) OR abs:\(escaped))"
+                let keywords = clause.value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                let scope = clause.scope ?? .titleAndAbstract
+                let keywordParts = keywords.map { kw -> String in
+                    let escaped = escapeQuery(kw)
+                    switch scope {
+                    case .title:
+                        return "ti:\(escaped)"
+                    case .abstract:
+                        return "abs:\(escaped)"
+                    case .titleAndAbstract:
+                        return "(ti:\(escaped) OR abs:\(escaped))"
+                    }
                 }
+                if keywordParts.count > 1 {
+                    return "(\(keywordParts.joined(separator: " OR ")))"
+                }
+                return keywordParts.first ?? ""
             }
         }
 
