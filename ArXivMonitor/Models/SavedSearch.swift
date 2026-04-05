@@ -51,10 +51,12 @@ struct SavedSearch: Codable, Identifiable, Hashable {
     var lastQueriedAt: String?
     var colorHex: String
     var isPaused: Bool
+    var fetchFromDate: String?
 
     init(id: UUID = UUID(), name: String, clauses: [SearchClause],
          combineOperator: ClauseCombineOperator = .and, lastQueriedAt: String? = nil,
-         colorHex: String = searchColorPalette[0], isPaused: Bool = false) {
+         colorHex: String = searchColorPalette[0], isPaused: Bool = false,
+         fetchFromDate: String? = nil) {
         self.id = id
         self.name = name
         self.clauses = clauses
@@ -62,6 +64,7 @@ struct SavedSearch: Codable, Identifiable, Hashable {
         self.lastQueriedAt = lastQueriedAt
         self.colorHex = colorHex
         self.isPaused = isPaused
+        self.fetchFromDate = fetchFromDate
     }
 
     init(from decoder: Decoder) throws {
@@ -73,11 +76,31 @@ struct SavedSearch: Codable, Identifiable, Hashable {
         lastQueriedAt = try container.decodeIfPresent(String.self, forKey: .lastQueriedAt)
         colorHex = try container.decodeIfPresent(String.self, forKey: .colorHex) ?? searchColorPalette[0]
         isPaused = try container.decodeIfPresent(Bool.self, forKey: .isPaused) ?? false
+        fetchFromDate = try container.decodeIfPresent(String.self, forKey: .fetchFromDate)
     }
 
     /// True when every clause is an author clause (no keywords or categories).
     var isAuthorOnly: Bool {
         !clauses.isEmpty && clauses.allSatisfy { $0.field == .author }
+    }
+
+    /// The effective "from" date for the API query.
+    /// Applies to ALL search types — the submittedDate filter is type-agnostic.
+    /// - If `fetchFromDate` is explicitly set, use that (regardless of search type).
+    /// - If nil and the search is author-only, return nil (all time — the default for authors).
+    /// - If nil and the search has keywords/categories, return 90 days ago (the default for keywords).
+    var effectiveFetchFromDate: Date? {
+        if let dateStr = fetchFromDate {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            return formatter.date(from: dateStr)
+        }
+        if isAuthorOnly {
+            return nil  // default for author-only: all time
+        }
+        // Default for keyword/category/mixed: 90 days ago
+        return Calendar.current.date(byAdding: .day, value: -90, to: Date())
     }
 
     /// SwiftUI Color from the persisted hex string.

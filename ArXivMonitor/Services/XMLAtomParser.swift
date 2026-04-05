@@ -1,8 +1,15 @@
 import Foundation
 
+/// Result from parsing an arXiv Atom feed, including pagination metadata.
+struct ArXivFeedResult {
+    let papers: [MatchedPaper]
+    let totalResults: Int
+}
+
 /// Parses arXiv Atom 1.0 XML responses into MatchedPaper structs.
 final class XMLAtomParser: NSObject, XMLParserDelegate {
     private var papers: [MatchedPaper] = []
+    private var totalResults: Int = 0
     private var currentElement = ""
     private var currentText = ""
     private var parseError: Error?
@@ -19,7 +26,7 @@ final class XMLAtomParser: NSObject, XMLParserDelegate {
     private var insideEntry = false
     private var insideAuthor = false
 
-    static func parse(data: Data) throws -> [MatchedPaper] {
+    static func parse(data: Data) throws -> ArXivFeedResult {
         let parser = XMLParser(data: data)
         let delegate = XMLAtomParser()
         parser.delegate = delegate
@@ -29,7 +36,7 @@ final class XMLAtomParser: NSObject, XMLParserDelegate {
             print("[ArXivMonitor] XML parse error: \(error)")
             throw ArXivError.parseError
         }
-        return delegate.papers
+        return ArXivFeedResult(papers: delegate.papers, totalResults: delegate.totalResults)
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
@@ -129,6 +136,8 @@ final class XMLAtomParser: NSObject, XMLParserDelegate {
             entryPublished = text
         } else if elementName == "updated" && insideEntry {
             entryUpdated = text
+        } else if elementName == "totalResults" && !insideEntry {
+            totalResults = Int(text) ?? 0
         }
     }
 

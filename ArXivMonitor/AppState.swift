@@ -149,6 +149,9 @@ final class AppState: ObservableObject {
 
             // Scrub this search's ID from all papers
             scrubSearchID(updated.id)
+        } else if old.fetchFromDate != updated.fetchFromDate {
+            // Date window changed but clauses are the same — re-fetch but keep existing papers
+            savedSearches[index].lastQueriedAt = nil
         }
 
         save()
@@ -194,7 +197,8 @@ final class AppState: ObservableObject {
     }
 
     func dismissPaper(_ paperID: String) {
-        markRead(paperID: paperID)
+        matchedPapers.removeValue(forKey: paperID)
+        save()
     }
 
     func dismissAll() {
@@ -289,7 +293,11 @@ final class AppState: ObservableObject {
             fetchProgress = "Checking \(search.name)... (\(idx + 1)/\(searchesToFetch.count))"
 
             do {
-                let papers = try await ArXivAPIClient.fetch(search: search)
+                let papers = try await ArXivAPIClient.fetch(search: search) { [self] page, totalPages in
+                    if totalPages > 1 {
+                        self.fetchProgress = "Checking \(search.name)... page \(page)/\(totalPages) (\(idx + 1)/\(searchesToFetch.count))"
+                    }
+                }
                 let fetchTime = formatter.string(from: Date())
 
                 for paper in papers {

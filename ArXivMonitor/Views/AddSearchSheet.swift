@@ -13,6 +13,8 @@ struct AddSearchSheet: View {
     ]
     @State private var combineOperator: ClauseCombineOperator = .and
     @State private var colorHex: String = searchColorPalette[0]
+    @State private var useFetchFromDate: Bool = false
+    @State private var fetchFromDate: Date = Calendar.current.date(byAdding: .day, value: -90, to: Date())!
     @State private var showClauseChangeWarning = false
 
     var body: some View {
@@ -46,6 +48,33 @@ struct AddSearchSheet: View {
                     }
                 ))
                 .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Fetch articles from specific date", isOn: $useFetchFromDate)
+                    .font(.system(size: 12))
+
+                if useFetchFromDate {
+                    DatePicker(
+                        "From:",
+                        selection: $fetchFromDate,
+                        in: ...Date(),
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.field)
+                    .labelsHidden()
+                    .frame(width: 140)
+
+                    Text("Only articles submitted on or after this date will be fetched.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(isCurrentSearchAuthorOnly
+                        ? "Default: all time (author search)"
+                        : "Default: last 90 days")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Text("CLAUSES")
@@ -89,6 +118,15 @@ struct AddSearchSheet: View {
                 clauses = search.clauses
                 combineOperator = search.combineOperator
                 colorHex = search.colorHex
+                if let dateStr = search.fetchFromDate {
+                    let formatter = DateFormatter()
+                    formatter.dateFormat = "yyyy-MM-dd"
+                    formatter.timeZone = TimeZone(identifier: "UTC")
+                    if let date = formatter.date(from: dateStr) {
+                        fetchFromDate = date
+                        useFetchFromDate = true
+                    }
+                }
             } else {
                 let paletteIndex = appState.savedSearches.count % searchColorPalette.count
                 colorHex = searchColorPalette[paletteIndex]
@@ -147,6 +185,11 @@ struct AddSearchSheet: View {
         }
     }
 
+    private var isCurrentSearchAuthorOnly: Bool {
+        let nonEmpty = clauses.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        return !nonEmpty.isEmpty && nonEmpty.allSatisfy { $0.field == .author }
+    }
+
     private func placeholderFor(_ field: SearchField) -> String {
         switch field {
         case .keyword: return "e.g. flow matching"
@@ -159,6 +202,14 @@ struct AddSearchSheet: View {
         clauses.append(SearchClause(field: .keyword, value: "", scope: .titleAndAbstract))
     }
 
+    private func resolvedFetchFromDate() -> String? {
+        guard useFetchFromDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: fetchFromDate)
+    }
+
     private func saveSearch() {
         let trimmedClauses = clauses.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !trimmedClauses.isEmpty else { return }
@@ -169,6 +220,7 @@ struct AddSearchSheet: View {
             updated.clauses = trimmedClauses
             updated.combineOperator = combineOperator
             updated.colorHex = colorHex
+            updated.fetchFromDate = resolvedFetchFromDate()
 
             if !existing.clausesEqual(to: updated) {
                 showClauseChangeWarning = true
@@ -178,7 +230,8 @@ struct AddSearchSheet: View {
             }
         } else {
             let search = SavedSearch(name: name, clauses: trimmedClauses,
-                                     combineOperator: combineOperator, colorHex: colorHex)
+                                     combineOperator: combineOperator, colorHex: colorHex,
+                                     fetchFromDate: resolvedFetchFromDate())
             appState.addSearch(search)
             dismiss()
         }
@@ -191,6 +244,7 @@ struct AddSearchSheet: View {
         existing.clauses = trimmedClauses
         existing.combineOperator = combineOperator
         existing.colorHex = colorHex
+        existing.fetchFromDate = resolvedFetchFromDate()
         appState.updateSearch(existing)
         dismiss()
     }

@@ -10,8 +10,8 @@ struct ArXivAPIClient {
         return URLSession(configuration: config)
     }()
 
-    /// Build the arXiv API query URL for a saved search.
-    static func buildQueryURL(for search: SavedSearch) -> URL? {
+    /// Build the arXiv API query URL for a saved search, with pagination offset.
+    static func buildQueryURL(for search: SavedSearch, start: Int = 0) -> URL? {
         let queryParts = search.clauses.map { clause -> String in
             switch clause.field {
             case .category:
@@ -35,13 +35,12 @@ struct ArXivAPIClient {
         let separator = search.combineOperator == .or ? " OR " : " AND "
         var searchQuery = queryParts.joined(separator: separator)
 
-        // For keyword/mixed searches, restrict to past 90 days via submittedDate
-        if !search.isAuthorOnly {
+        // Apply date restriction using the search's effective "from" date
+        if let fromDate = search.effectiveFetchFromDate {
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyyMMddHHmm"
             dateFormatter.timeZone = TimeZone(identifier: "UTC")
-            let ninetyDaysAgo = Calendar.current.date(byAdding: .day, value: -90, to: Date())!
-            let startDate = dateFormatter.string(from: ninetyDaysAgo)
+            let startDate = dateFormatter.string(from: fromDate)
             let endDate = dateFormatter.string(from: Date())
             searchQuery = "(\(searchQuery)) AND submittedDate:[\(startDate) TO \(endDate)]"
         }
@@ -51,30 +50,78 @@ struct ArXivAPIClient {
         guard let encodedQuery = searchQuery.addingPercentEncoding(
             withAllowedCharacters: .arXivQueryAllowed
         ) else { return nil }
-        let urlString = "\(baseURL)?search_query=\(encodedQuery)&sortBy=lastUpdatedDate&sortOrder=descending&max_results=\(maxResults)"
+        let urlString = "\(baseURL)?search_query=\(encodedQuery)&sortBy=lastUpdatedDate&sortOrder=descending&start=\(start)&max_results=\(maxResults)"
         return URL(string: urlString)
     }
 
-    /// Fetch papers for a saved search from the arXiv API.
-    static func fetch(search: SavedSearch) async throws -> [MatchedPaper] {
-        guard let url = buildQueryURL(for: search) else {
-            throw ArXivError.invalidQuery
-        }
+    /// Maximum total results to fetch across all pages (safety cap).
+    private static let maxTotalResults = 1000
 
-        let (data, response) = try await session.data(from: url)
+    /// Fetch papers for a saved search from the arXiv API, paginating to get all results.
+    /// - Parameters:
+    ///   - search: The saved search to query.
+    ///   - progressHandler: Called with (currentPage, estimatedTotalPages) before each page fetch.
+    /// - Returns: All matching papers across all pages.
+    static func fetch(
+        search: SavedSearch,
+        progressHandler: ((Int, Int) -> Void)? = nil
+    ) async throws -> [MatchedPaper] {
+        var allPapers: [MatchedPaper] = []
+        var start = 0
+        var totalResults = 0
+        var currentPage = 1
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw ArXivError.httpError((response as? HTTPURLResponse)?.statusCode ?? -1)
-        }
+        repeat {
+            guard let url = buildQueryURL(for: search, start: start) else {
+                throw ArXivError.invalidQuery
+            }
 
-        let papers = try XMLAtomParser.parse(data: data)
+            // Report progress before fetching
+            let estimatedPages = totalResults > 0
+                ? max(1, Int(ceil(Double(min(totalResults, maxTotalResults)) / Double(maxResults))))
+                : 1
+            progressHandler?(currentPage, estimatedPages)
 
-        if papers.count >= maxResults {
-            print("[ArXivMonitor] Warning: results may be truncated for search '\(search.name)' (got \(papers.count) results)")
-        }
+            // 3-second delay between pages (skip before first page)
+            if start > 0 {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+            }
 
-        return papers
+            let (data, response) = try await session.data(from: url)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw ArXivError.httpError((response as? HTTPURLResponse)?.statusCode ?? -1)
+            }
+
+            let result = try XMLAtomParser.parse(data: data)
+
+            // Update totalResults from the first page response
+            if start == 0 {
+                totalResults = result.totalResults
+                if totalResults > maxTotalResults {
+                    print("[ArXivMonitor] Query for '\(search.name)' matches \(totalResults) results, capping at \(maxTotalResults)")
+                }
+            }
+
+            allPapers.append(contentsOf: result.papers)
+
+            // If this page returned fewer results than max_results, we've hit the end
+            if result.papers.count < maxResults {
+                break
+            }
+
+            start += maxResults
+            currentPage += 1
+
+            // Safety cap: don't fetch beyond maxTotalResults
+            let effectiveTotal = min(totalResults, maxTotalResults)
+            if start >= effectiveTotal {
+                break
+            }
+        } while true
+
+        return allPapers
     }
 
     /// Escape special characters in query values for arXiv API.

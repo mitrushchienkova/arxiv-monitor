@@ -123,7 +123,8 @@ final class XMLAtomParserTests: XCTestCase {
         </feed>
         """
         let data = xml.data(using: .utf8)!
-        let papers = try XMLAtomParser.parse(data: data)
+        let result = try XMLAtomParser.parse(data: data)
+        let papers = result.papers
 
         XCTAssertEqual(papers.count, 2)
 
@@ -154,8 +155,8 @@ final class XMLAtomParserTests: XCTestCase {
         </feed>
         """
         let data = xml.data(using: .utf8)!
-        let papers = try XMLAtomParser.parse(data: data)
-        XCTAssertEqual(papers.count, 0)
+        let result = try XMLAtomParser.parse(data: data)
+        XCTAssertEqual(result.papers.count, 0)
     }
 
     func testExtractArXivIDStripsVersion() throws {
@@ -176,7 +177,8 @@ final class XMLAtomParserTests: XCTestCase {
         </feed>
         """
         let data = xml.data(using: .utf8)!
-        let papers = try XMLAtomParser.parse(data: data)
+        let result = try XMLAtomParser.parse(data: data)
+        let papers = result.papers
         XCTAssertEqual(papers.count, 1)
         XCTAssertEqual(papers[0].id, "2301.00001")
         XCTAssertEqual(papers[0].link, "https://arxiv.org/abs/2301.00001")
@@ -248,7 +250,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.unreadCount, 1)
         state.dismissPaper(paper.id)
         XCTAssertEqual(state.unreadCount, 0)
-        XCTAssertFalse(state.matchedPapers[paper.id]!.isNew)
+        XCTAssertNil(state.matchedPapers[paper.id], "Dismissed paper should be removed entirely")
     }
 
     func testDismissAll() {
