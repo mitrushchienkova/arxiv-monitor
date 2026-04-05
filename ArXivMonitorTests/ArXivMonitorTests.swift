@@ -372,7 +372,7 @@ final class AppStateTests: XCTestCase {
             foundAt: "2024-01-01T00:00:00Z", isNew: true
         )
         XCTAssertEqual(state.unreadCount, 2)
-        state.dismissAll()
+        state.markAllRead()
         XCTAssertEqual(state.unreadCount, 0)
     }
 

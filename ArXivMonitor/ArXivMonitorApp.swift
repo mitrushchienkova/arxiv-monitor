@@ -118,7 +118,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         Task { @MainActor in
             switch response.actionIdentifier {
             case "DISMISS_ALL_ACTION":
-                appState.dismissAll()
+                appState.markAllRead()
             case "OPEN_ACTION", UNNotificationDefaultActionIdentifier:
                 NSApplication.shared.activate(ignoringOtherApps: true)
             default:

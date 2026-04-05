@@ -42,13 +42,7 @@ struct PaperListView: View {
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) },
-                            onToggleRead: {
-                                if paper.isNew {
-                                    appState.markRead(paperID: paper.id)
-                                } else {
-                                    appState.markUnread(paperID: paper.id)
-                                }
-                            }
+                            onToggleRead: { appState.toggleRead(paperID: paper.id) }
                         )
                     }
                 }
@@ -73,7 +67,7 @@ struct PaperListView: View {
                     Button("Mark All as Read") {
                         switch selection {
                         case .allPapers:
-                            appState.dismissAll()
+                            appState.markAllRead()
                         case .search(let id):
                             appState.markAllRead(for: id)
                         }

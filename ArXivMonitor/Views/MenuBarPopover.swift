@@ -66,7 +66,7 @@ struct MenuBarPopover: View {
 
                 if appState.unreadCount > 0 {
                     Button("Mark All as Read") {
-                        appState.dismissAll()
+                        appState.markAllRead()
                     }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11))
@@ -174,13 +174,7 @@ struct MenuBarPopover: View {
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) },
-                            onToggleRead: {
-                                if paper.isNew {
-                                    appState.markRead(paperID: paper.id)
-                                } else {
-                                    appState.markUnread(paperID: paper.id)
-                                }
-                            }
+                            onToggleRead: { appState.toggleRead(paperID: paper.id) }
                         )
                         .padding(.horizontal, 12)
                         Divider().padding(.leading, 12)
@@ -203,13 +197,7 @@ struct MenuBarPopover: View {
                             savedSearches: appState.savedSearches,
                             onOpen: { appState.openPaper(paper) },
                             onDismiss: { appState.dismissPaper(paper.id) },
-                            onToggleRead: {
-                                if paper.isNew {
-                                    appState.markRead(paperID: paper.id)
-                                } else {
-                                    appState.markUnread(paperID: paper.id)
-                                }
-                            }
+                            onToggleRead: { appState.toggleRead(paperID: paper.id) }
                         )
                         .padding(.horizontal, 12)
                         Divider().padding(.leading, 12)

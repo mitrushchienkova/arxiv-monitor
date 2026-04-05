@@ -138,7 +138,8 @@ final class AppState: ObservableObject {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try FileManager.default.copyItem(at: dataFileURL, to: url)
+            let data = try Data(contentsOf: dataFileURL)
+            try data.write(to: url, options: .atomic)
         } catch {
             print("[ArXivMonitor] Export failed: \(error)")
         }
@@ -188,9 +189,15 @@ final class AppState: ObservableObject {
             return
         }
 
+        // Re-read directory after creating new backup for accurate pruning
         let maxBackups = 4
-        if sortedBackups.count >= maxBackups {
-            for old in sortedBackups.suffix(from: maxBackups - 1) {
+        let updatedBackups = ((try? fm.contentsOfDirectory(at: backupDirectoryURL,
+                                  includingPropertiesForKeys: nil,
+                                  options: .skipsHiddenFiles)) ?? [])
+            .filter { $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        if updatedBackups.count > maxBackups {
+            for old in updatedBackups.suffix(from: maxBackups) {
                 try? fm.removeItem(at: old)
             }
         }
@@ -285,7 +292,7 @@ final class AppState: ObservableObject {
         save()
     }
 
-    func dismissAll() {
+    func markAllRead() {
         for (id, var paper) in matchedPapers where paper.isNew {
             paper.isNew = false
             matchedPapers[id] = paper
@@ -313,6 +320,14 @@ final class AppState: ObservableObject {
         paper.isNew = true
         matchedPapers[paperID] = paper
         save()
+    }
+
+    func toggleRead(paperID: String) {
+        if matchedPapers[paperID]?.isNew == true {
+            markRead(paperID: paperID)
+        } else {
+            markUnread(paperID: paperID)
+        }
     }
 
     // MARK: - Fetch Cycle
@@ -384,9 +399,14 @@ final class AppState: ObservableObject {
             fetchProgress = "Checking \(search.name)... (\(idx + 1)/\(searchesToFetch.count))"
 
             do {
-                let papers = try await ArXivAPIClient.fetch(search: search) { [self] page, totalPages in
+                let searchName = search.name
+                let searchIdx = idx + 1
+                let searchCount = searchesToFetch.count
+                let papers = try await ArXivAPIClient.fetch(search: search) { page, totalPages in
                     if totalPages > 1 {
-                        self.fetchProgress = "Checking \(search.name)... page \(page)/\(totalPages) (\(idx + 1)/\(searchesToFetch.count))"
+                        Task { @MainActor [weak self] in
+                            self?.fetchProgress = "Checking \(searchName)... page \(page)/\(totalPages) (\(searchIdx)/\(searchCount))"
+                        }
                     }
                 }
                 let fetchTime = formatter.string(from: Date())

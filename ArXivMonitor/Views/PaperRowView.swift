@@ -72,13 +72,15 @@ struct PaperRowView: View {
         }
         .padding(.vertical, 4)
         .contextMenu {
-            if paper.isNew {
-                Button("Mark as Read") {
-                    onToggleRead?()
-                }
-            } else {
-                Button("Mark as Unread") {
-                    onToggleRead?()
+            if let onToggleRead {
+                if paper.isNew {
+                    Button("Mark as Read") {
+                        onToggleRead()
+                    }
+                } else {
+                    Button("Mark as Unread") {
+                        onToggleRead()
+                    }
                 }
             }
         }
