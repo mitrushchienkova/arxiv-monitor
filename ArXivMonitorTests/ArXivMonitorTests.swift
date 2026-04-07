@@ -115,6 +115,345 @@ final class ArXivAPIClientTests: XCTestCase {
         let url = ArXivAPIClient.buildQueryURL(for: search)
         XCTAssertNil(url, "Empty clauses should produce nil URL")
     }
+
+    func testBuildQueryURL_hyphenatedKeywordIsQuoted() {
+        let search = SavedSearch(
+            name: "Gromov-Witten",
+            clauses: [SearchClause(field: .keyword, value: "Gromov-Witten", scope: .title)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        // Hyphenated keyword should be quoted (percent-encoded quotes are %22)
+        XCTAssertTrue(query.contains("%22Gromov-Witten%22"),
+                       "Hyphenated keyword should be quoted in query, got: \(query)")
+    }
+
+    func testBuildQueryURL_hyphenatedAuthorIsQuoted() {
+        let search = SavedSearch(
+            name: "Author search",
+            clauses: [SearchClause(field: .author, value: "Kontsevich-Soibelman")]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertTrue(query.contains("%22Kontsevich-Soibelman%22"),
+                       "Hyphenated author should be quoted, got: \(query)")
+    }
+
+    /// Bug 1B: date filtering is now done CLIENT-SIDE in fetch(). The URL
+    /// must NOT contain submittedDate or lastUpdatedDate as a search_query
+    /// field, even when the search has an explicit fetchFromDate.
+    /// The explicit fetchFromDate value is still honored — it's applied
+    /// client-side via SavedSearch.effectiveFetchFromDate and applyDateFilter.
+    func testBuildQueryURL_omitsServerSideDateFilter_withExplicitDate() {
+        let search = SavedSearch(
+            name: "Test",
+            clauses: [SearchClause(field: .keyword, value: "test", scope: .title)],
+            fetchFromDate: "2026-01-01"
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertFalse(query.contains("submittedDate"),
+                       "Date filter must NOT be in search_query — it's applied client-side. Got: \(query)")
+        XCTAssertFalse(query.contains("lastUpdatedDate:["),
+                       "lastUpdatedDate must NEVER appear as a query field — arXiv API silently ignores it. Got: \(query)")
+        // Sort by lastUpdatedDate desc must remain — it's what makes early
+        // termination of the client-side filter sound.
+        XCTAssertTrue(query.contains("sortBy=lastUpdatedDate"),
+                      "Must still sort by lastUpdatedDate desc, got: \(query)")
+        XCTAssertTrue(query.contains("sortOrder=descending"),
+                      "Sort order must be descending so client-side filter can early-terminate, got: \(query)")
+    }
+
+    /// Bug 1B: when fetchFromDate is NOT set, the URL still contains no date
+    /// filter (the 90-day default is applied client-side, not server-side).
+    func testBuildQueryURL_omitsServerSideDateFilter_noExplicitDate() {
+        let search = SavedSearch(
+            name: "Gromov-Witten",
+            clauses: [SearchClause(field: .keyword, value: "Gromov-Witten", scope: .titleAndAbstract)]
+            // fetchFromDate intentionally nil
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertFalse(query.contains("submittedDate"),
+                       "No server-side date filter when fetchFromDate is unset, got: \(query)")
+        XCTAssertFalse(query.contains("lastUpdatedDate:"),
+                       "lastUpdatedDate must NEVER appear as a query field. Got: \(query)")
+        XCTAssertTrue(query.contains("sortBy=lastUpdatedDate"),
+                      "Must still sort by lastUpdatedDate desc to catch revisions, got: \(query)")
+    }
+}
+
+// MARK: - Bug 1B: client-side date filter tests
+
+final class ArXivAPIClientDateFilterTests: XCTestCase {
+    private func paper(id: String, updatedAt: String) -> MatchedPaper {
+        MatchedPaper(
+            id: id,
+            title: "T",
+            authors: "A",
+            primaryCategory: "math.AG",
+            categories: ["math.AG"],
+            publishedAt: updatedAt,
+            updatedAt: updatedAt,
+            link: "https://arxiv.org/abs/\(id)",
+            matchedSearchIDs: [],
+            foundAt: "2026-04-07T00:00:00Z",
+            isNew: false
+        )
+    }
+
+    private func date(_ iso: String) -> Date {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso)!
+    }
+
+    func testApplyDateFilter_noFromDateKeepsEverything() {
+        let papers = [
+            paper(id: "1", updatedAt: "2026-03-09T12:00:00Z"),
+            paper(id: "2", updatedAt: "2024-01-01T00:00:00Z"),
+        ]
+        let result = ArXivAPIClient.applyDateFilter(papers, fromDate: nil)
+        XCTAssertEqual(result.kept.map(\.id), ["1", "2"])
+        XCTAssertFalse(result.reachedCutoff)
+    }
+
+    func testApplyDateFilter_keepsPapersAtOrAfterCutoff() {
+        let papers = [
+            paper(id: "1", updatedAt: "2026-04-01T00:00:00Z"),
+            paper(id: "2", updatedAt: "2026-01-07T00:00:00Z"),  // exactly at cutoff
+            paper(id: "3", updatedAt: "2025-12-31T23:59:59Z"),  // before cutoff
+        ]
+        let result = ArXivAPIClient.applyDateFilter(papers, fromDate: date("2026-01-07T00:00:00Z"))
+        XCTAssertEqual(result.kept.map(\.id), ["1", "2"])
+        XCTAssertTrue(result.reachedCutoff)
+    }
+
+    func testApplyDateFilter_keptAndCutoffWhenLastIsOutOfWindow() {
+        // The early-termination case: in-window papers MUST be kept even
+        // when the page contains an out-of-window paper at the end.
+        let papers = [
+            paper(id: "1", updatedAt: "2026-03-09T21:29:57Z"),  // 2504.14273-like
+            paper(id: "2", updatedAt: "2026-02-15T00:00:00Z"),
+            paper(id: "3", updatedAt: "2025-11-30T00:00:00Z"),  // out of window
+        ]
+        let result = ArXivAPIClient.applyDateFilter(papers, fromDate: date("2026-01-07T00:00:00Z"))
+        XCTAssertEqual(result.kept.map(\.id), ["1", "2"])
+        XCTAssertTrue(result.reachedCutoff)
+    }
+
+    func testApplyDateFilter_emptyPage() {
+        let result = ArXivAPIClient.applyDateFilter([], fromDate: date("2026-01-07T00:00:00Z"))
+        XCTAssertTrue(result.kept.isEmpty)
+        XCTAssertFalse(result.reachedCutoff)
+    }
+
+    func testApplyDateFilter_allOutOfWindow() {
+        let papers = [
+            paper(id: "1", updatedAt: "2024-12-31T00:00:00Z"),
+            paper(id: "2", updatedAt: "2024-06-01T00:00:00Z"),
+        ]
+        let result = ArXivAPIClient.applyDateFilter(papers, fromDate: date("2026-01-07T00:00:00Z"))
+        XCTAssertTrue(result.kept.isEmpty)
+        XCTAssertTrue(result.reachedCutoff)
+    }
+
+    func testApplyDateFilter_paper2504_14273IsKept() {
+        // Regression test for the original user-reported bug: paper 2504.14273
+        // has updatedAt=2026-03-09T21:29:57Z and must be kept by the default
+        // 90-day window (Jan 7 2026 cutoff for "today" 2026-04-07).
+        let papers = [paper(id: "2504.14273", updatedAt: "2026-03-09T21:29:57Z")]
+        let result = ArXivAPIClient.applyDateFilter(papers, fromDate: date("2026-01-07T00:00:00Z"))
+        XCTAssertEqual(result.kept.map(\.id), ["2504.14273"])
+        XCTAssertFalse(result.reachedCutoff)
+    }
+}
+
+// MARK: - Bug 2: Retry helper tests
+
+/// URLProtocol stub for testing ArXivAPIClient.fetchWithRetry.
+/// Each test sets `MockURLProtocol.responses` to a queue of (status, body, error)
+/// tuples; the protocol pops one per request. `error != nil` simulates a transport
+/// failure (e.g. timeout); otherwise it returns an HTTPURLResponse with the given status.
+final class MockURLProtocol: URLProtocol {
+    struct Stub {
+        let status: Int
+        let body: Data
+        let error: Error?
+    }
+    static var responses: [Stub] = []
+    static var requestCount = 0
+
+    static func reset() {
+        responses = []
+        requestCount = 0
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        MockURLProtocol.requestCount += 1
+        guard !MockURLProtocol.responses.isEmpty else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let stub = MockURLProtocol.responses.removeFirst()
+        if let error = stub.error {
+            client?.urlProtocol(self, didFailWithError: error)
+            return
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: stub.status,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private func makeStubSession() -> URLSession {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [MockURLProtocol.self]
+    config.timeoutIntervalForRequest = 5
+    return URLSession(configuration: config)
+}
+
+final class ArXivAPIClientRetryTests: XCTestCase {
+    private let url = URL(string: "https://export.arxiv.org/api/query?search_query=ti:test")!
+
+    override func setUp() {
+        super.setUp()
+        MockURLProtocol.reset()
+        // Override the 5s production backoff so retry tests run in ~1ms instead of ~5s.
+        ArXivAPIClient.retryBackoffNanoseconds = 1_000_000  // 1ms
+    }
+
+    override func tearDown() {
+        MockURLProtocol.reset()
+        ArXivAPIClient.retryBackoffNanoseconds = 5_000_000_000  // restore production default
+        super.tearDown()
+    }
+
+    /// Bug 2: a 503 followed by a 200 should retry once and return the 200.
+    func testFetchWithRetry_retriesOn5xx() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 503, body: Data(), error: nil),
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let (data, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2, "Should make exactly 2 requests (initial + 1 retry)")
+    }
+
+    /// Bug 2: a timeout followed by a 200 should retry once and return the 200.
+    func testFetchWithRetry_retriesOnTimeout() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 0, body: Data(), error: URLError(.timedOut)),
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let (data, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2, "Should make exactly 2 requests (initial + 1 retry)")
+    }
+
+    /// Bug 2: networkConnectionLost (Wi-Fi flap) should also be retried.
+    /// Locks in the expanded transient-error set.
+    func testFetchWithRetry_retriesOnNetworkConnectionLost() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 0, body: Data(), error: URLError(.networkConnectionLost)),
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let (data, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2)
+    }
+
+    /// Bug 2: a 4xx must NOT be retried — it indicates a real client error.
+    func testFetchWithRetry_doesNotRetryOn4xx() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 400, body: Data(), error: nil),
+            .init(status: 200, body: Data("should-not-reach".utf8), error: nil),
+        ]
+
+        let (_, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 400)
+        XCTAssertEqual(MockURLProtocol.requestCount, 1, "4xx must not trigger a retry")
+    }
+
+    /// Bug 2: a successful first response should not retry.
+    func testFetchWithRetry_doesNotRetryOnSuccess() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let (_, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(MockURLProtocol.requestCount, 1, "Successful responses must not trigger a retry")
+    }
+
+    /// Bug 2: invariant — at most ONE retry on 5xx. A second 5xx returns
+    /// the failure rather than retrying again. Locks in the retry budget.
+    func testFetchWithRetry_doesNotDoubleRetryOn5xx() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 503, body: Data(), error: nil),
+            .init(status: 503, body: Data(), error: nil),
+            .init(status: 200, body: Data("should-not-reach".utf8), error: nil),
+        ]
+
+        let (_, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+
+        XCTAssertEqual(response.statusCode, 503,
+                       "After one retry, a second 5xx should be returned without further retry")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2,
+                       "Should make exactly 2 requests — initial + 1 retry, never reaching the 200")
+    }
+
+    /// Bug 2: invariant — at most ONE retry on timeout. A second timeout
+    /// propagates as URLError.timedOut. Locks in the retry budget.
+    func testFetchWithRetry_doesNotDoubleRetryOnTimeout() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 0, body: Data(), error: URLError(.timedOut)),
+            .init(status: 0, body: Data(), error: URLError(.timedOut)),
+            .init(status: 200, body: Data("should-not-reach".utf8), error: nil),
+        ]
+
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected URLError.timedOut to be thrown after second timeout")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .timedOut,
+                           "Second timeout should propagate as URLError.timedOut")
+        }
+        XCTAssertEqual(MockURLProtocol.requestCount, 2,
+                       "Should make exactly 2 requests — initial + 1 retry, never reaching the 200")
+    }
 }
 
 final class XMLAtomParserTests: XCTestCase {
@@ -488,6 +827,25 @@ final class AppStateTests: XCTestCase {
         state.emptyTrash()
         XCTAssertEqual(state.trashedPapers.count, 0)
         XCTAssertEqual(state.allPapersSorted.count, 1) // non-trashed paper still there
+    }
+
+    func testMoveSearch() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let s1 = SavedSearch(name: "First", clauses: [SearchClause(field: .keyword, value: "a", scope: .title)])
+        let s2 = SavedSearch(name: "Second", clauses: [SearchClause(field: .keyword, value: "b", scope: .title)])
+        let s3 = SavedSearch(name: "Third", clauses: [SearchClause(field: .keyword, value: "c", scope: .title)])
+        state.addSearch(s1)
+        state.addSearch(s2)
+        state.addSearch(s3)
+        XCTAssertEqual(state.savedSearches.map(\.name), ["First", "Second", "Third"])
+
+        // Move "Third" to position 0 (before "First")
+        state.moveSearch(from: IndexSet(integer: 2), to: 0)
+        XCTAssertEqual(state.savedSearches.map(\.name), ["Third", "First", "Second"])
+
+        // Verify persistence: reload from same directory
+        let reloaded = AppState(dataDirectoryURL: tempDir)
+        XCTAssertEqual(reloaded.savedSearches.map(\.name), ["Third", "First", "Second"])
     }
 
     func testDataVersionBackwardCompatibility() {

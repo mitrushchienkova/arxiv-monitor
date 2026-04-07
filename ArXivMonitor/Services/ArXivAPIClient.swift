@@ -4,11 +4,24 @@ struct ArXivAPIClient {
     private static let baseURL = "https://export.arxiv.org/api/query"
     private static let maxResults = 100
 
-    private static let session: URLSession = {
+    static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 60
         return URLSession(configuration: config)
     }()
+
+    /// Backoff between the initial request and a single retry on transient failures.
+    /// Tests override this to keep the suite fast (~1ms).
+    static var retryBackoffNanoseconds: UInt64 = 5_000_000_000
+
+    /// URLError codes that indicate a transient transport failure worth retrying.
+    /// `timedOut` is the most common; the other two are common on menu-bar apps
+    /// that survive Wi-Fi sleeps and network reconfigurations.
+    private static let transientURLErrorCodes: Set<URLError.Code> = [
+        .timedOut,
+        .networkConnectionLost,
+        .cannotConnectToHost,
+    ]
 
     /// Build the arXiv API query URL for a saved search, with pagination offset.
     static func buildQueryURL(for search: SavedSearch, start: Int = 0) -> URL? {
@@ -52,17 +65,19 @@ struct ArXivAPIClient {
 
         guard !queryParts.isEmpty else { return nil }
         let separator = search.combineOperator == .or ? " OR " : " AND "
-        var searchQuery = queryParts.joined(separator: separator)
+        let searchQuery = queryParts.joined(separator: separator)
 
-        // Apply date restriction using the search's effective "from" date
-        if let fromDate = search.effectiveFetchFromDate {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyyMMddHHmm"
-            dateFormatter.timeZone = TimeZone(identifier: "UTC")
-            let startDate = dateFormatter.string(from: fromDate)
-            let endDate = dateFormatter.string(from: Date())
-            searchQuery = "(\(searchQuery)) AND submittedDate:[\(startDate) TO \(endDate)]"
-        }
+        // Bug 1B: date filtering is performed CLIENT-SIDE in fetch(), not here.
+        // The arXiv API silently drops `lastUpdatedDate` as a search_query field
+        // (it is only valid as a `sortBy` argument), and a `submittedDate`-only
+        // filter would exclude revisions of older papers (e.g. 2504.14273 was
+        // submitted 2025-04 but revised 2026-03 — a 90-day submittedDate window
+        // in 2026 would miss it). We instead rely on
+        // `sortBy=lastUpdatedDate&sortOrder=descending` plus a post-parse filter
+        // on `MatchedPaper.updatedAt`. The user's explicit `fetchFromDate` and
+        // the implicit 90-day default are both honored via
+        // `SavedSearch.effectiveFetchFromDate`, passed to
+        // `applyDateFilter(_:fromDate:)` during pagination.
 
         // Build URL manually to preserve colons, parentheses, and other query operators
         // that arXiv expects in the search_query parameter.
@@ -106,11 +121,10 @@ struct ArXivAPIClient {
                 try await Task.sleep(nanoseconds: 3_000_000_000)
             }
 
-            let (data, response) = try await session.data(from: url)
+            let (data, httpResponse) = try await fetchWithRetry(url: url)
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                throw ArXivError.httpError((response as? HTTPURLResponse)?.statusCode ?? -1)
+            guard httpResponse.statusCode == 200 else {
+                throw ArXivError.httpError(httpResponse.statusCode)
             }
 
             let result = try XMLAtomParser.parse(data: data)
@@ -123,7 +137,21 @@ struct ArXivAPIClient {
                 }
             }
 
-            allPapers.append(contentsOf: result.papers)
+            // Bug 1B: client-side date filter. Server-side filtering can't
+            // catch revisions of older papers (the arXiv API silently drops
+            // `lastUpdatedDate` as a query field), so we filter the parsed
+            // page here using `updatedAt`. Pagination stops as soon as a page
+            // contains any paper outside the window — subsequent pages
+            // (sorted by lastUpdatedDate descending) are guaranteed older.
+            let filterResult = ArXivAPIClient.applyDateFilter(
+                result.papers,
+                fromDate: search.effectiveFetchFromDate
+            )
+            allPapers.append(contentsOf: filterResult.kept)
+
+            if filterResult.reachedCutoff {
+                break
+            }
 
             // If this page returned fewer results than max_results, we've hit the end
             if result.papers.count < maxResults {
@@ -143,10 +171,96 @@ struct ArXivAPIClient {
         return allPapers
     }
 
+    /// Fetch a single page with one retry on transient failures (timeout, HTTP 5xx).
+    /// 4xx responses are returned without retry; the caller decides how to react.
+    /// - Parameters:
+    ///   - url: The URL to GET.
+    ///   - session: URLSession to use. Defaults to the shared `ArXivAPIClient.session`.
+    ///     Tests inject a session backed by a `URLProtocol` stub.
+    static func fetchWithRetry(
+        url: URL,
+        session: URLSession = ArXivAPIClient.session
+    ) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ArXivError.httpError(-1)
+            }
+            // Retry once on 5xx
+            if httpResponse.statusCode >= 500 && httpResponse.statusCode < 600 {
+                try await Task.sleep(nanoseconds: retryBackoffNanoseconds)
+                let (retryData, retryResponse) = try await session.data(from: url)
+                guard let retryHTTP = retryResponse as? HTTPURLResponse else {
+                    throw ArXivError.httpError(-1)
+                }
+                return (retryData, retryHTTP)
+            }
+            return (data, httpResponse)
+        } catch let error as URLError where Self.transientURLErrorCodes.contains(error.code) {
+            // Retry once on transient transport errors
+            try await Task.sleep(nanoseconds: retryBackoffNanoseconds)
+            let (data, response) = try await session.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ArXivError.httpError(-1)
+            }
+            return (data, httpResponse)
+        }
+    }
+
+    /// Result of applying a client-side date filter to a single page of papers.
+    /// `kept` are the papers that satisfy `paper.updatedAt >= fromDate`.
+    /// `reachedCutoff` is true when at least one paper in the input had
+    /// `updatedAt < fromDate` — meaning subsequent pages (sorted by
+    /// lastUpdatedDate descending) cannot contain in-window results.
+    struct DateFilterResult {
+        let kept: [MatchedPaper]
+        let reachedCutoff: Bool
+    }
+
+    /// Filter a single page of papers by `updatedAt >= fromDate`. Because the
+    /// caller fetches with `sortBy=lastUpdatedDate&sortOrder=descending`, once
+    /// we see ANY paper with `updatedAt < fromDate`, the caller can stop
+    /// paginating.
+    ///
+    /// Comparison is done lexicographically on canonical ISO8601 UTC strings
+    /// (`yyyy-MM-ddTHH:mm:ssZ`), which is chronologically correct because
+    /// arXiv emits `<updated>` in exactly that form and we format the cutoff
+    /// with the same `ISO8601DateFormatter` options.
+    ///
+    /// - Parameters:
+    ///   - papers: One page of papers, in lastUpdatedDate-descending order.
+    ///   - fromDate: Inclusive lower bound. nil means no filtering.
+    /// - Returns: kept papers and a `reachedCutoff` flag.
+    static func applyDateFilter(_ papers: [MatchedPaper], fromDate: Date?) -> DateFilterResult {
+        guard let fromDate else {
+            return DateFilterResult(kept: papers, reachedCutoff: false)
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]  // UTC, no fractional seconds — matches arXiv <updated> format
+        let cutoffString = formatter.string(from: fromDate)
+
+        var kept: [MatchedPaper] = []
+        var reachedCutoff = false
+        for paper in papers {
+            if paper.updatedAt >= cutoffString {
+                kept.append(paper)
+            } else {
+                reachedCutoff = true
+                // Do NOT break — defensive: if a single page has ties on
+                // updatedAt and they appear in arbitrary order, continue
+                // scanning so we don't drop an in-window paper that follows
+                // an out-of-window one within the same page. Cross-page
+                // ordering is reliable enough for early termination in fetch().
+            }
+        }
+        return DateFilterResult(kept: kept, reachedCutoff: reachedCutoff)
+    }
+
     /// Escape special characters in query values for arXiv API.
     private static func escapeQuery(_ value: String) -> String {
-        // Wrap multi-word values in quotes for phrase matching
-        if value.contains(" ") {
+        // Wrap values in quotes when they contain spaces (multi-word phrases)
+        // or hyphens (Lucene interprets unquoted hyphens as NOT operator)
+        if value.contains(" ") || value.contains("-") {
             let escaped = value.replacingOccurrences(of: "\"", with: "\\\"")
             return "\"\(escaped)\""
         }
@@ -160,7 +274,7 @@ private extension CharacterSet {
     static let arXivQueryAllowed: CharacterSet = {
         var set = CharacterSet.urlQueryAllowed
         set.remove(charactersIn: "&=") // must encode these to avoid breaking query string
-        set.insert(charactersIn: "():") // arXiv needs these literally
+        set.insert(charactersIn: "()[]:") // arXiv needs these literally for query syntax and date ranges
         return set
     }()
 }

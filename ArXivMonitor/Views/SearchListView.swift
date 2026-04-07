@@ -72,6 +72,9 @@ struct SearchListView: View {
                         }
                     }
                 }
+                .onMove { source, destination in
+                    appState.moveSearch(from: source, to: destination)
+                }
             }
             if !appState.trashedPapers.isEmpty {
                 Section {

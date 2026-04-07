@@ -350,6 +350,11 @@ final class AppState: ObservableObject {
 
     // MARK: - Search Management
 
+    func moveSearch(from source: IndexSet, to destination: Int) {
+        savedSearches.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
     func addSearch(_ search: SavedSearch) {
         savedSearches.append(search)
         save()
