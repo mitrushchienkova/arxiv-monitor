@@ -51,8 +51,16 @@ final class ArXivAPIClientTests: XCTestCase {
         let url = ArXivAPIClient.buildQueryURL(for: search)
         XCTAssertNotNil(url)
         let query = url!.absoluteString
-        // Multi-word value should be quoted
-        XCTAssertTrue(query.contains("abs"), "Query should contain abs: prefix, got: \(query)")
+        // Multi-word keyword should split on whitespace and AND the tokens
+        // within the abstract scope. No phrase-quoting.
+        XCTAssertTrue(query.contains("abs:flow") || query.contains("abs%3Aflow"),
+                       "Query should contain abs:flow, got: \(query)")
+        XCTAssertTrue(query.contains("abs:matching") || query.contains("abs%3Amatching"),
+                       "Query should contain abs:matching, got: \(query)")
+        XCTAssertTrue(query.contains("AND"),
+                       "Multi-word keyword must AND its tokens, got: \(query)")
+        XCTAssertFalse(query.contains("%22flow") || query.contains("flow%20matching%22") || query.contains("%22flow%20matching%22"),
+                        "Multi-word keyword must NOT be wrapped as a phrase, got: \(query)")
     }
 
     func testBuildQueryURL_keywordTitleAndAbstract() {
@@ -66,6 +74,11 @@ final class ArXivAPIClientTests: XCTestCase {
         // Should contain both ti: and abs: with OR
         XCTAssertTrue(query.contains("ti") && query.contains("abs"),
                        "Query should contain both ti: and abs: for titleAndAbstract scope, got: \(query)")
+        // Multi-word keyword must AND tokens, not wrap as a phrase.
+        XCTAssertTrue(query.contains("AND"),
+                       "Multi-word keyword must AND its tokens, got: \(query)")
+        XCTAssertFalse(query.contains("%22flow%20matching%22"),
+                        "Multi-word keyword must NOT be wrapped as a phrase, got: \(query)")
     }
 
     func testBuildQueryURL_keywordWithDateFilter_noDoubleEncoding() {
@@ -139,6 +152,106 @@ final class ArXivAPIClientTests: XCTestCase {
         let query = url!.absoluteString
         XCTAssertTrue(query.contains("%22Kontsevich-Soibelman%22"),
                        "Hyphenated author should be quoted, got: \(query)")
+    }
+
+    /// Bug: multi-word unquoted keyword must split on whitespace and AND the
+    /// tokens, matching the arXiv website's unquoted-search semantics so users
+    /// don't miss papers where the words appear non-adjacently
+    /// (e.g. "osculating orbital elements" for input "osculating elements").
+    func testBuildQueryURL_multiWordKeyword_splitsIntoAND() {
+        let search = SavedSearch(
+            name: "Osculating elements",
+            clauses: [SearchClause(field: .keyword, value: "osculating elements", scope: .titleAndAbstract)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        // Expected pre-encoding form:
+        //   ((ti:osculating OR abs:osculating) AND (ti:elements OR abs:elements))
+        // Post-encoding, spaces become %20 and colons are preserved literally.
+        let expected = "(ti:osculating%20OR%20abs:osculating)%20AND%20(ti:elements%20OR%20abs:elements)"
+        XCTAssertTrue(query.contains(expected),
+                       "Multi-word keyword should split into AND of per-token (ti OR abs) groups. Expected substring: \(expected); got: \(query)")
+        // Must NOT be wrapped as a phrase.
+        XCTAssertFalse(query.contains("%22osculating%20elements%22"),
+                        "Multi-word keyword must NOT be wrapped as a Lucene phrase, got: \(query)")
+    }
+
+    /// If the user wraps a keyword in literal double quotes, preserve the
+    /// phrase form as an intentional escape hatch.
+    func testBuildQueryURL_explicitQuotedKeyword_preservesPhrase() {
+        let search = SavedSearch(
+            name: "Mirror symmetry phrase",
+            clauses: [SearchClause(field: .keyword, value: "\"mirror symmetry\"", scope: .titleAndAbstract)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        // Phrase form: (ti:"mirror symmetry" OR abs:"mirror symmetry")
+        XCTAssertTrue(query.contains("%22mirror%20symmetry%22"),
+                       "Explicit-quoted keyword should be preserved as a phrase, got: \(query)")
+        XCTAssertTrue(query.contains("ti:%22mirror%20symmetry%22") || query.contains("ti%3A%22mirror%20symmetry%22"),
+                       "Phrase must apply to ti: field, got: \(query)")
+        XCTAssertTrue(query.contains("abs:%22mirror%20symmetry%22") || query.contains("abs%3A%22mirror%20symmetry%22"),
+                       "Phrase must apply to abs: field, got: \(query)")
+        // Must NOT be AND-split.
+        XCTAssertFalse(query.contains("ti:mirror%20AND%20ti:symmetry"),
+                        "Explicit-quoted keyword must NOT be AND-split, got: \(query)")
+    }
+
+    /// Hyphenated single token must still be quoted (escapeQuery keeps the
+    /// quote-escape that defeats Lucene's NOT operator on hyphens).
+    func testBuildQueryURL_hyphenPlusWhitespace() {
+        let search = SavedSearch(
+            name: "Gromov-Witten invariants",
+            clauses: [SearchClause(field: .keyword, value: "Gromov-Witten invariants", scope: .titleAndAbstract)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        // Expected: ((ti:"Gromov-Witten" OR abs:"Gromov-Witten") AND (ti:invariants OR abs:invariants))
+        XCTAssertTrue(query.contains("%22Gromov-Witten%22"),
+                       "Hyphenated token must remain quoted even in a multi-word keyword, got: \(query)")
+        XCTAssertTrue(query.contains("ti:invariants") || query.contains("ti%3Ainvariants"),
+                       "Unhyphenated token must appear unquoted, got: \(query)")
+        XCTAssertTrue(query.contains("AND"),
+                       "Multi-word keyword must AND its tokens, got: \(query)")
+        // Must NOT wrap the whole thing as a single phrase.
+        XCTAssertFalse(query.contains("%22Gromov-Witten%20invariants%22"),
+                        "Multi-word keyword must NOT be wrapped as a single phrase, got: \(query)")
+    }
+
+    /// Comma-separated keywords stay ORed at the outer level, and whitespace
+    /// within each sub-keyword is AND-split.
+    func testBuildQueryURL_commaSeparatedOuterOR_innerAND() {
+        let search = SavedSearch(
+            name: "Mixed",
+            clauses: [SearchClause(field: .keyword, value: "osculating elements, Gromov-Witten", scope: .titleAndAbstract)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertTrue(query.contains("AND"), "Multi-word sub-keyword must AND tokens, got: \(query)")
+        XCTAssertTrue(query.contains("OR"), "Comma-separated keywords must OR, got: \(query)")
+        XCTAssertTrue(query.contains("%22Gromov-Witten%22"),
+                       "Hyphenated sub-keyword must still be quoted, got: \(query)")
+    }
+
+    /// Single-token keyword unchanged: (ti:osculating OR abs:osculating).
+    func testBuildQueryURL_singleTokenKeywordUnchanged() {
+        let search = SavedSearch(
+            name: "Osculating",
+            clauses: [SearchClause(field: .keyword, value: "osculating", scope: .titleAndAbstract)]
+        )
+        let url = ArXivAPIClient.buildQueryURL(for: search)
+        XCTAssertNotNil(url)
+        let query = url!.absoluteString
+        XCTAssertTrue(query.contains("ti:osculating") || query.contains("ti%3Aosculating"),
+                       "Single-token keyword should produce ti:osculating, got: \(query)")
+        XCTAssertTrue(query.contains("abs:osculating") || query.contains("abs%3Aosculating"),
+                       "Single-token keyword should produce abs:osculating, got: \(query)")
+        XCTAssertFalse(query.contains("AND"),
+                        "Single-token keyword must not contain AND, got: \(query)")
     }
 
     /// Bug 1B: date filtering is now done CLIENT-SIDE in fetch(). The URL
@@ -284,6 +397,14 @@ final class MockURLProtocol: URLProtocol {
         let status: Int
         let body: Data
         let error: Error?
+        let headers: [String: String]?
+
+        init(status: Int, body: Data, error: Error?, headers: [String: String]? = nil) {
+            self.status = status
+            self.body = body
+            self.error = error
+            self.headers = headers
+        }
     }
     static var responses: [Stub] = []
     static var requestCount = 0
@@ -312,7 +433,7 @@ final class MockURLProtocol: URLProtocol {
             url: request.url!,
             statusCode: stub.status,
             httpVersion: "HTTP/1.1",
-            headerFields: nil
+            headerFields: stub.headers
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: stub.body)
@@ -335,11 +456,14 @@ final class ArXivAPIClientRetryTests: XCTestCase {
         MockURLProtocol.reset()
         // Override the 5s production backoff so retry tests run in ~1ms instead of ~5s.
         ArXivAPIClient.retryBackoffNanoseconds = 1_000_000  // 1ms
+        // Disable jitter so timing stays deterministic in CI.
+        ArXivAPIClient.retryJitterMaxNanoseconds = 0
     }
 
     override func tearDown() {
         MockURLProtocol.reset()
         ArXivAPIClient.retryBackoffNanoseconds = 5_000_000_000  // restore production default
+        ArXivAPIClient.retryJitterMaxNanoseconds = 1_000_000_000  // restore production default
         super.tearDown()
     }
 
@@ -454,6 +578,165 @@ final class ArXivAPIClientRetryTests: XCTestCase {
         XCTAssertEqual(MockURLProtocol.requestCount, 2,
                        "Should make exactly 2 requests — initial + 1 retry, never reaching the 200")
     }
+}
+
+// MARK: - HTTP 429 rate-limit retry tests
+
+final class ArXivAPIClientRateLimitTests: XCTestCase {
+    private let url = URL(string: "https://export.arxiv.org/api/query?search_query=ti:test")!
+
+    override func setUp() {
+        super.setUp()
+        MockURLProtocol.reset()
+        // Keep the suite fast: collapse both backoff knobs to ~1ms, cap the
+        // server-supplied Retry-After value, and disable jitter for determinism.
+        ArXivAPIClient.retryBackoffNanoseconds = 1_000_000
+        ArXivAPIClient.rateLimitedBackoffNanoseconds = 1_000_000
+        ArXivAPIClient.rateLimitedBackoffCapNanoseconds = 1_000_000
+        ArXivAPIClient.retryJitterMaxNanoseconds = 0
+        ArXivAPIClient.rateLimitedJitterMaxNanoseconds = 0
+    }
+
+    override func tearDown() {
+        MockURLProtocol.reset()
+        ArXivAPIClient.retryBackoffNanoseconds = 5_000_000_000
+        ArXivAPIClient.rateLimitedBackoffNanoseconds = 30_000_000_000
+        ArXivAPIClient.rateLimitedBackoffCapNanoseconds = .max
+        ArXivAPIClient.retryJitterMaxNanoseconds = 1_000_000_000
+        ArXivAPIClient.rateLimitedJitterMaxNanoseconds = 5_000_000_000
+        super.tearDown()
+    }
+
+    /// 429 on first request followed by 200 should retry and return success.
+    func testFetchWithRetry_retriesOn429_thenSucceeds() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data("Rate exceeded.".utf8), error: nil),
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let start = Date()
+        let (data, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2, "Should make exactly 2 requests (initial + 1 retry)")
+        XCTAssertLessThan(elapsed, 1.0, "Test must complete quickly with overridden backoff (<1s)")
+    }
+
+    /// Two 429s in a row should throw `.rateLimited` rather than returning the response.
+    func testFetchWithRetry_twoConsecutive429s_throwsRateLimited() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil),
+            .init(status: 429, body: Data(), error: nil),
+        ]
+
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected ArXivError.rateLimited")
+        } catch let error as ArXivError {
+            guard case .rateLimited = error else {
+                XCTFail("Expected .rateLimited, got \(error)")
+                return
+            }
+        }
+        XCTAssertEqual(MockURLProtocol.requestCount, 2, "At most one retry on 429")
+    }
+
+    /// `Retry-After: 45` on both responses should surface 45 in the thrown error.
+    func testFetchWithRetry_429WithRetryAfterHeader_surfacesSeconds() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "45"]),
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "45"]),
+        ]
+
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected ArXivError.rateLimited(retryAfterSeconds: 45)")
+        } catch let error as ArXivError {
+            guard case .rateLimited(let seconds) = error else {
+                XCTFail("Expected .rateLimited, got \(error)")
+                return
+            }
+            XCTAssertEqual(seconds, 45, "Retry-After header value should surface in the error")
+        }
+    }
+
+    /// `Retry-After` as an HTTP-date in the past or near future should not crash.
+    /// When parseable, the app should honor it (bounded to [15, 120]); when
+    /// unparseable, fall back to the default.
+    func testFetchWithRetry_429WithHTTPDateRetryAfter_doesNotCrash() async throws {
+        let session = makeStubSession()
+        // An HTTP-date ~60 seconds in the future.
+        let future = Date().addingTimeInterval(60)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let dateStr = f.string(from: future)
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": dateStr]),
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": dateStr]),
+        ]
+
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected .rateLimited")
+        } catch let error as ArXivError {
+            guard case .rateLimited(let seconds) = error else {
+                XCTFail("Expected .rateLimited, got \(error)")
+                return
+            }
+            // We don't assert an exact number — parseable dates produce a
+            // clamped [15, 120] value, unparseable ones nil. Both are fine,
+            // the contract is simply "don't crash".
+            if let seconds {
+                XCTAssertGreaterThanOrEqual(seconds, 0)
+                XCTAssertLessThanOrEqual(seconds, 120)
+            }
+        }
+    }
+
+    /// Unparseable `Retry-After` should fall back to the default backoff without
+    /// crashing or hanging on the production 30s timer (overridden here to 1ms).
+    func testFetchWithRetry_429WithUnparseableRetryAfter_fallsBackToDefault() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "soon maybe"]),
+            .init(status: 200, body: Data("ok".utf8), error: nil),
+        ]
+
+        let (_, response) = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+        XCTAssertEqual(response.statusCode, 200, "Retry after unparseable Retry-After should still fire")
+        XCTAssertEqual(MockURLProtocol.requestCount, 2)
+    }
+
+    /// The `parseRetryAfter` helper should accept both integer-seconds and
+    /// RFC 1123 date forms, and return nil for missing/garbage headers.
+    func testParseRetryAfter_acceptsSecondsAndHTTPDate() {
+        func makeResponse(_ headers: [String: String]) -> HTTPURLResponse {
+            HTTPURLResponse(url: URL(string: "https://example.com/")!,
+                            statusCode: 429,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: headers)!
+        }
+        XCTAssertEqual(ArXivAPIClient.parseRetryAfter(from: makeResponse(["Retry-After": "45"])), 45)
+        XCTAssertNil(ArXivAPIClient.parseRetryAfter(from: makeResponse([:])))
+        XCTAssertNil(ArXivAPIClient.parseRetryAfter(from: makeResponse(["Retry-After": "nonsense"])))
+        // HTTP-date ~30s in the future should parse to a small positive int.
+        let future = Date().addingTimeInterval(30)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let seconds = ArXivAPIClient.parseRetryAfter(from: makeResponse(["Retry-After": f.string(from: future)]))
+        XCTAssertNotNil(seconds)
+        if let seconds { XCTAssertGreaterThanOrEqual(seconds, 0) }
+    }
+
 }
 
 final class XMLAtomParserTests: XCTestCase {
@@ -863,6 +1146,126 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(persisted.savedSearches.isEmpty)
     }
 
+    /// A 429 landing in memory must survive a relaunch. If `rateLimitedSearchIDs`
+    /// and `rateLimitedUntil` were ephemeral, `lastCycleFailedSearchIDs` would be
+    /// restored but the rate-limit classification would be lost, and the UI would
+    /// show a red "failed · Retry" line instead of the softer "waiting" treatment.
+    func testRateLimitedStatePersistsAcrossReload() throws {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let searchA = SavedSearch(name: "A", clauses: [SearchClause(field: .keyword, value: "a", scope: .title)])
+        let searchB = SavedSearch(name: "B", clauses: [SearchClause(field: .keyword, value: "b", scope: .title)])
+        state.savedSearches = [searchA, searchB]
+
+        // Simulate a cycle where A was rate-limited with a known Retry-After
+        // and B failed for an unrelated reason (e.g. transport error).
+        let retryAt = Date().addingTimeInterval(45)
+        state.lastCycleFailedSearchIDs = [searchA.id, searchB.id]
+        state.rateLimitedSearchIDs = [searchA.id]
+        state.rateLimitedUntil = [searchA.id: retryAt]
+
+        // Write it out via the same encoder the app uses on save.
+        let encoded = try state.encodedPersistedData()
+        let dataFile = tempDir.appendingPathComponent("data.json")
+        try encoded.write(to: dataFile, options: .atomic)
+
+        // Reload from disk — mimics app relaunch.
+        let reloaded = AppState(dataDirectoryURL: tempDir)
+        XCTAssertEqual(Set(reloaded.lastCycleFailedSearchIDs), [searchA.id, searchB.id],
+                       "Failed IDs should survive reload")
+        XCTAssertEqual(reloaded.rateLimitedSearchIDs, [searchA.id],
+                       "Rate-limited subset must survive reload — otherwise 429'd searches render as generic failures")
+        XCTAssertEqual(reloaded.rateLimitedUntil[searchA.id]?.timeIntervalSince1970 ?? 0,
+                       retryAt.timeIntervalSince1970,
+                       accuracy: 1.0,
+                       "rateLimitedUntil should round-trip so the popover keeps showing the same retry time")
+        // The "other failed" classification is derived, not persisted — check
+        // it behaves correctly on the reloaded state.
+        XCTAssertEqual(reloaded.rateLimitedSearchNames, ["A"])
+        XCTAssertEqual(reloaded.otherFailedSearchNames, ["B"])
+    }
+
+    /// Once the cooldown has expired, a previously rate-limited search should
+    /// fall out of `rateLimitedSearchNames` and into `otherFailedSearchNames`
+    /// so the user gets the red "failed · Retry" prompt back. Prevents the
+    /// stuck-forever "waiting…" state the reviewer flagged.
+    func testRateLimitedCooldownAgesOutOfRateLimitedList() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let search = SavedSearch(name: "Stale", clauses: [SearchClause(field: .keyword, value: "x", scope: .title)])
+        state.savedSearches = [search]
+        state.lastCycleFailedSearchIDs = [search.id]
+        state.rateLimitedSearchIDs = [search.id]
+        // Cooldown expired a minute ago.
+        state.rateLimitedUntil = [search.id: Date().addingTimeInterval(-60)]
+
+        XCTAssertEqual(state.rateLimitedSearchNames, [],
+                       "Expired cooldown must not pin the search in 'waiting…' state")
+        XCTAssertEqual(state.otherFailedSearchNames, ["Stale"],
+                       "Expired rate-limit should surface a Retry prompt like any other failure")
+    }
+
+    /// A rate-limited entry with no `rateLimitedUntil` timestamp (e.g. a
+    /// hypothetical decode from an older persisted format) must not be treated
+    /// as permanently rate-limited.
+    func testRateLimitedWithoutUntilFallsBackToOtherFailed() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let search = SavedSearch(name: "Orphan", clauses: [SearchClause(field: .keyword, value: "x", scope: .title)])
+        state.savedSearches = [search]
+        state.lastCycleFailedSearchIDs = [search.id]
+        state.rateLimitedSearchIDs = [search.id]
+        state.rateLimitedUntil = [:]
+
+        XCTAssertEqual(state.rateLimitedSearchNames, [])
+        XCTAssertEqual(state.otherFailedSearchNames, ["Orphan"])
+    }
+
+    /// Deleting a search must scrub its failure/rate-limit metadata so the
+    /// popover's "retry at …" computation (which scans rateLimitedSearchIDs)
+    /// doesn't surface a time tied to a search that no longer exists.
+    func testDeleteSearchScrubsFetchStatus() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let keep = SavedSearch(name: "Keep", clauses: [SearchClause(field: .keyword, value: "k", scope: .title)])
+        let drop = SavedSearch(name: "Drop", clauses: [SearchClause(field: .keyword, value: "d", scope: .title)])
+        state.savedSearches = [keep, drop]
+        state.lastCycleFailedSearchIDs = [keep.id, drop.id]
+        state.rateLimitedSearchIDs = [drop.id]
+        state.rateLimitedUntil = [drop.id: Date().addingTimeInterval(120)]
+
+        state.deleteSearch(drop.id)
+
+        XCTAssertEqual(state.lastCycleFailedSearchIDs, [keep.id])
+        XCTAssertFalse(state.rateLimitedSearchIDs.contains(drop.id))
+        XCTAssertNil(state.rateLimitedUntil[drop.id])
+    }
+
+    /// Editing a search's clauses invalidates its previous failure
+    /// classification — the new query may succeed where the old one failed,
+    /// or vice versa. Cosmetic edits (name only) preserve status.
+    func testUpdateSearchClauseChangeScrubsFetchStatusButNameChangeDoesNot() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let original = SavedSearch(name: "Orig", clauses: [SearchClause(field: .keyword, value: "a", scope: .title)])
+        state.savedSearches = [original]
+        state.lastCycleFailedSearchIDs = [original.id]
+        state.rateLimitedSearchIDs = [original.id]
+        state.rateLimitedUntil = [original.id: Date().addingTimeInterval(120)]
+
+        // Cosmetic rename — status should survive.
+        var renamed = original
+        renamed.name = "Renamed"
+        state.updateSearch(renamed)
+        XCTAssertEqual(state.lastCycleFailedSearchIDs, [original.id],
+                       "Cosmetic edit should not clear failure metadata")
+        XCTAssertTrue(state.rateLimitedSearchIDs.contains(original.id))
+
+        // Clause change — status must be scrubbed.
+        var rewritten = renamed
+        rewritten.clauses = [SearchClause(field: .keyword, value: "totally different", scope: .title)]
+        state.updateSearch(rewritten)
+        XCTAssertEqual(state.lastCycleFailedSearchIDs, [],
+                       "Clause change should clear stale failure metadata")
+        XCTAssertFalse(state.rateLimitedSearchIDs.contains(original.id))
+        XCTAssertNil(state.rateLimitedUntil[original.id])
+    }
+
     func testLegacyDotBadgePreferenceMigratesToNone() {
         UserDefaults.standard.set("dot", forKey: "badgeStyle")
 
@@ -925,6 +1328,130 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(persisted.savedSearches.count, 3, "Should export 3 sample searches")
         XCTAssertEqual(persisted.matchedPapers.count, 4, "Should export 4 sample papers")
         XCTAssertEqual(state.exportStatusMessage, "Exported button-export.json.")
+    }
+}
+
+// MARK: - Scoped refresh tests
+
+@MainActor
+final class AppStateScopedRefreshTests: XCTestCase {
+    private var tempDir: URL!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ArXivMonitorScopedRefreshTests-\(UUID().uuidString)")
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    /// Wait for `isFetching` to return to false. Scoped fetches on empty-clause
+    /// searches throw invalidQuery immediately (no network), so this resolves
+    /// quickly without the 3-second inter-search sleep.
+    private func waitForFetchToFinish(_ state: AppState, timeout: TimeInterval = 5) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while state.isFetching && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+        }
+    }
+
+    /// A scoped refresh (by search ID) must NOT clear cycle-level failure state
+    /// for other, untouched searches — if search B previously failed and the
+    /// user refreshes only A, B must remain in `lastCycleFailedSearchIDs`.
+    func testScopedRefresh_preservesUnrelatedFailedSearchIDs() async {
+        let state = AppState(dataDirectoryURL: tempDir)
+
+        // Two searches; both have empty clauses so any fetch attempt will
+        // deterministically throw ArXivError.invalidQuery (no network needed).
+        let searchA = SavedSearch(name: "A", clauses: [])
+        let searchB = SavedSearch(name: "B", clauses: [])
+        state.savedSearches = [searchA, searchB]
+
+        // Seed: B previously failed in a prior cycle.
+        state.lastCycleFailedSearchIDs = [searchB.id]
+        let priorLastCycleAt = "2024-01-01T00:00:00Z"
+        state.lastCycleAt = priorLastCycleAt
+
+        // Scoped refresh of A only.
+        state.runFetchCycle(onlySearchIDs: [searchA.id])
+        await waitForFetchToFinish(state)
+
+        // A tried and failed (invalidQuery); B was NOT retried and must remain failed.
+        XCTAssertTrue(state.lastCycleFailedSearchIDs.contains(searchA.id),
+                      "Scoped search A failed this attempt — should be in failed list")
+        XCTAssertTrue(state.lastCycleFailedSearchIDs.contains(searchB.id),
+                      "Untouched search B must retain its prior failed status")
+        // Scoped refresh must not overwrite lastCycleAt (not a full cycle).
+        XCTAssertEqual(state.lastCycleAt, priorLastCycleAt,
+                       "Scoped refresh must not update lastCycleAt")
+    }
+
+    /// A scoped refresh of a search that previously failed should REMOVE it
+    /// from `lastCycleFailedSearchIDs` when the retry succeeds (or, in this
+    /// test, when no invalidQuery is thrown). Here we use the no-op case:
+    /// a search with no clauses will throw invalidQuery and stay in the list,
+    /// but the complementary case is that *other* searches' failure status
+    /// never changes — which is the coverage we want alongside the first test.
+    /// Additionally verify that full (unscoped) refresh still resets the list
+    /// and updates lastCycleAt.
+    func testFullRefresh_resetsFailedListAndUpdatesLastCycleAt() async {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let searchA = SavedSearch(name: "A", clauses: [])
+        state.savedSearches = [searchA]
+
+        let ancientLastCycle = "2024-01-01T00:00:00Z"
+        state.lastCycleAt = ancientLastCycle
+        // Stale failed ID that doesn't exist on any current search — a full
+        // refresh should drop it because the full path replaces the list wholesale.
+        state.lastCycleFailedSearchIDs = [UUID()]
+
+        state.runFetchCycle()
+        await waitForFetchToFinish(state)
+
+        XCTAssertNotEqual(state.lastCycleAt, ancientLastCycle,
+                          "Full refresh must update lastCycleAt")
+        // After a full cycle, only currently-failing searches should be in the list.
+        XCTAssertEqual(Set(state.lastCycleFailedSearchIDs), [searchA.id],
+                       "Full refresh should replace the failed list, not merge")
+    }
+
+    /// A scoped refresh with an empty set should be a no-op: isFetching flips
+    /// briefly but nothing is touched. Guards against accidental "fetch all"
+    /// regression when UI passes an empty scope.
+    func testScopedRefresh_emptyScopeIsNoOp() async {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let search = SavedSearch(name: "A", clauses: [])
+        state.savedSearches = [search]
+        let priorLastCycleAt = "2024-01-01T00:00:00Z"
+        state.lastCycleAt = priorLastCycleAt
+        state.lastCycleFailedSearchIDs = []
+
+        state.runFetchCycle(onlySearchIDs: [])
+        await waitForFetchToFinish(state)
+
+        XCTAssertEqual(state.lastCycleAt, priorLastCycleAt,
+                       "Empty-scope refresh must not touch lastCycleAt")
+        XCTAssertTrue(state.lastCycleFailedSearchIDs.isEmpty,
+                      "Empty-scope refresh must not touch failed list")
+    }
+
+    /// Scoped refresh should also run for paused searches the user explicitly
+    /// targets — the paused filter only applies to the automatic cycle.
+    func testScopedRefresh_includesPausedSearchWhenExplicitlyTargeted() async {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let paused = SavedSearch(name: "Paused", clauses: [], isPaused: true)
+        state.savedSearches = [paused]
+
+        state.runFetchCycle(onlySearchIDs: [paused.id])
+        await waitForFetchToFinish(state)
+
+        // The paused search was attempted — it will have failed (invalidQuery),
+        // confirming the scoped path bypassed the pause guard.
+        XCTAssertTrue(state.lastCycleFailedSearchIDs.contains(paused.id),
+                      "Paused search should be fetched when user explicitly targets it")
     }
 }
 

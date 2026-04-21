@@ -60,6 +60,38 @@ struct PaperListView: View {
         filteredPapers.contains(where: \.isNew)
     }
 
+    /// Scope of the refresh button: a specific saved-search ID when one is
+    /// selected in the sidebar, otherwise nil ("refresh all").
+    private var refreshScopeID: UUID? {
+        if case .search(let id) = selection { return id }
+        return nil
+    }
+
+    /// Human-readable name of the currently-selected search, for help/menu labels.
+    private var selectedSearchName: String? {
+        guard case .search(let id) = selection else { return nil }
+        return appState.savedSearches.first(where: { $0.id == id })?.name
+    }
+
+    private var refreshHelpText: String {
+        if let name = selectedSearchName {
+            return "Refresh \u{201C}\(name)\u{201D} (\u{2318}R). Hold \u{21E7}\u{2318}R or right-click for Refresh All."
+        }
+        return "Refresh all searches (\u{2318}R)"
+    }
+
+    private func performScopedRefresh() {
+        if let id = refreshScopeID {
+            appState.runFetchCycle(onlySearchIDs: [id])
+        } else {
+            appState.runFetchCycle()
+        }
+    }
+
+    private func performRefreshAll() {
+        appState.runFetchCycle()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if isSearchBarVisible {
@@ -136,6 +168,17 @@ struct PaperListView: View {
                 .opacity(0)
                 .accessibilityHidden(true)
         )
+        .background(
+            // Hidden Shift+Cmd+R trigger: always fetches all searches regardless
+            // of sidebar selection. Mirrors the ⌘R shortcut on the toolbar
+            // button (which scopes to the current search when one is selected).
+            Button(action: performRefreshAll) { EmptyView() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.isFetching)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+        )
         .onChange(of: selection) { _, _ in
             // Clear filter state when switching sidebar items — the filter
             // only makes sense for the currently-visible list.
@@ -146,7 +189,7 @@ struct PaperListView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if !isTrashView {
-                    Button(action: { appState.runFetchCycle() }) {
+                    Button(action: performScopedRefresh) {
                         if appState.isFetching {
                             ProgressView()
                                 .controlSize(.small)
@@ -155,7 +198,18 @@ struct PaperListView: View {
                         }
                     }
                     .disabled(appState.isFetching)
-                    .help("Refresh now")
+                    .help(refreshHelpText)
+                    .keyboardShortcut("r", modifiers: .command)
+                    .contextMenu {
+                        if let name = selectedSearchName {
+                            Button("Refresh \u{201C}\(name)\u{201D}") {
+                                performScopedRefresh()
+                            }
+                        }
+                        Button("Refresh All Searches") {
+                            performRefreshAll()
+                        }
+                    }
                 }
             }
             ToolbarItem(placement: .primaryAction) {

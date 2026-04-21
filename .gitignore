@@ -1,1 +1,16 @@
+# Xcode
 build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+Package.resolved
+
+# Claude Code local state (per-machine settings, scheduled task locks, etc.)
+.claude/

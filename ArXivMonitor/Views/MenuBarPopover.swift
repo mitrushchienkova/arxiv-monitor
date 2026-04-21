@@ -98,8 +98,21 @@ struct MenuBarPopover: View {
                 Text("Last checked: \(formattedTime(lastCycle))")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                if !appState.failedSearchNames.isEmpty {
-                    Text("· \(appState.failedSearchNames.joined(separator: ", ")) failed")
+                // Rate-limited searches render as a softer, non-red "waiting"
+                // line with a clock icon and no Retry button — hitting Retry
+                // would just get us 429'd again until arXiv's window clears.
+                let rateLimitedNames = appState.rateLimitedSearchNames
+                if !rateLimitedNames.isEmpty {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text(rateLimitedStatusText(names: rateLimitedNames))
+                        .font(.system(size: 10).italic())
+                        .foregroundStyle(.secondary)
+                }
+                let otherFailedNames = appState.otherFailedSearchNames
+                if !otherFailedNames.isEmpty {
+                    Text("· \(otherFailedNames.joined(separator: ", ")) failed")
                         .font(.system(size: 10))
                         .foregroundStyle(.red)
                     Button("Retry") {
@@ -214,5 +227,24 @@ struct MenuBarPopover: View {
         let timeFormatter = DateFormatter()
         timeFormatter.timeStyle = .short
         return timeFormatter.string(from: date)
+    }
+
+    /// Compose the rate-limited status line. When every rate-limited search
+    /// shares the same `rateLimitedUntil` date (common: a single fetch cycle
+    /// triggers the 429 for all of them at once), show "retry at 16:10" using
+    /// the latest such moment. Fall back to "waiting…" if no `Retry-After` was
+    /// surfaced. Absolute time avoids the stale-seconds problem a live counter
+    /// would have without a ticking timer.
+    private func rateLimitedStatusText(names: [String]) -> String {
+        let joined = names.joined(separator: ", ")
+        let latestRetryAt = appState.rateLimitedSearchIDs
+            .compactMap { appState.rateLimitedUntil[$0] }
+            .max()
+        if let retryAt = latestRetryAt {
+            let f = DateFormatter()
+            f.timeStyle = .short
+            return "\(joined): arXiv rate-limited, retry at \(f.string(from: retryAt))"
+        }
+        return "\(joined): arXiv rate-limited, waiting…"
     }
 }

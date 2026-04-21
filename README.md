@@ -1,8 +1,47 @@
 # arXiv Monitor
 
-A native macOS menu bar app that monitors [arXiv.org](https://arxiv.org) for new papers matching user-configurable saved searches. Sends native macOS notifications when new papers arrive.
+![macOS](https://img.shields.io/badge/macOS-13%2B-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9-orange)
+![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
+
+Stay on top of new [arXiv.org](https://arxiv.org) papers without leaving your menu bar. arXiv Monitor runs saved searches on a schedule and pings you with a native macOS notification the moment something relevant shows up -- so you never have to remember to check again.
 
 Built with SwiftUI. Zero external dependencies -- Apple frameworks only. Requires macOS 13+.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="Main window: sidebar of saved searches, matched papers on the right" width="780" />
+  <br><sub><em>Main window — sidebar of saved searches, matched papers on the right.</em></sub>
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/popover.png" alt="Menu-bar popover showing recent papers" width="380" /><br>
+      <sub><em>Menu-bar popover — new papers at a glance.</em></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/menu-bar.png" alt="Menu bar icon with unread badge" width="380" /><br>
+      <sub><em>Menu-bar icon with unread badge.</em></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/search-editor.png" alt="Add/Edit Search sheet" width="380" /><br>
+      <sub><em>Add/Edit Search sheet — clauses, scopes, color.</em></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/settings.png" alt="Settings pane" width="380" /><br>
+      <sub><em>Settings — notifications, badge style, launch at login.</em></sub>
+    </td>
+  </tr>
+</table>
+
+
+## Quick start
+
+Open `ArXivMonitor.xcodeproj` in Xcode 15+, select the `ArXivMonitor` scheme, and hit Run. That's it -- no package manager, no external dependencies. See [Building](#building) below for the command-line equivalent.
 
 ## Features
 
@@ -10,12 +49,12 @@ Built with SwiftUI. Zero external dependencies -- Apple frameworks only. Require
 
 Create independent saved searches to monitor arXiv for specific topics. Each search consists of one or more clauses combined with AND/OR logic:
 
-- **Keyword** -- match against title, abstract, or both. Comma-separated values are ORed (e.g. `mirror symmetry, SYZ`)
+- **Keyword** -- match against title, abstract, or both. Comma-separated values are ORed (e.g. `mirror symmetry, SYZ`); space-separated words within one value are ANDed (e.g. `osculating elements` finds papers containing both words anywhere in the chosen scope, matching arXiv's website search behavior). Wrap a value in literal double-quotes (e.g. `"mirror symmetry"`) to force an exact-phrase match instead.
 - **Category** -- filter by arXiv category. Comma-separated values are ORed (e.g. `math.AG, hep-th, math.SG`)
 - **Author** -- search by author name
 
 Examples:
-- "Gromov-Witten" (keyword in title + abstract)
+- Gromov-Witten (keyword in title + abstract -- hyphenated terms are auto-quoted to defeat Lucene's NOT operator)
 - `mirror symmetry, SYZ` in categories `math.AG, hep-th, math.SG` (keyword AND category, with multiple values ORed within each)
 - cs.LG papers by Hinton (category AND author)
 - "flow matching" in title (keyword, title only)

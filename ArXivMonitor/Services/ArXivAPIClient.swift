@@ -14,6 +14,33 @@ struct ArXivAPIClient {
     /// Tests override this to keep the suite fast (~1ms).
     static var retryBackoffNanoseconds: UInt64 = 5_000_000_000
 
+    /// Backoff between the initial request and a single retry on HTTP 429
+    /// (rate limiting). Semantically distinct from `retryBackoffNanoseconds`
+    /// — 429 means the server is explicitly telling us to slow down, so a
+    /// longer wait is warranted. Overridden only if `Retry-After` parsing
+    /// finds a shorter/longer value (bounded to [15, 120] seconds) at the
+    /// call site. Tests override the base default to keep the suite fast.
+    static var rateLimitedBackoffNanoseconds: UInt64 = 30_000_000_000
+
+    /// Test-only cap on the effective 429 backoff (including a server
+    /// `Retry-After` value). Production leaves this at `UInt64.max` so the
+    /// server-provided delay is honored in full. Tests lower it (alongside
+    /// `rateLimitedBackoffNanoseconds`) so suites stay fast regardless of
+    /// which stub path the fixture exercises.
+    static var rateLimitedBackoffCapNanoseconds: UInt64 = .max
+
+    /// Maximum jitter (in nanoseconds) added on top of the 5xx backoff.
+    /// De-correlates retries if multiple searches ever hit a transient
+    /// failure at the same time. Tests override this to 0 so timing stays
+    /// deterministic.
+    static var retryJitterMaxNanoseconds: UInt64 = 1_000_000_000
+
+    /// Maximum jitter (in nanoseconds) added on top of the 429 backoff.
+    /// Larger than `retryJitterMaxNanoseconds` because parallel rate-limited
+    /// searches are more likely to retry in lockstep than transient 5xx ones.
+    /// Tests override this to 0 so timing stays deterministic.
+    static var rateLimitedJitterMaxNanoseconds: UInt64 = 5_000_000_000
+
     /// URLError codes that indicate a transient transport failure worth retrying.
     /// `timedOut` is the most common; the other two are common on menu-bar apps
     /// that survive Wi-Fi sleeps and network reconfigurations.
@@ -46,15 +73,48 @@ struct ArXivAPIClient {
                     .filter { !$0.isEmpty }
                 let scope = clause.scope ?? .titleAndAbstract
                 let keywordParts = keywords.map { kw -> String in
-                    let escaped = escapeQuery(kw)
-                    switch scope {
-                    case .title:
-                        return "ti:\(escaped)"
-                    case .abstract:
-                        return "abs:\(escaped)"
-                    case .titleAndAbstract:
-                        return "(ti:\(escaped) OR abs:\(escaped))"
+                    // Explicit-phrase escape hatch: if the user wraps the
+                    // keyword in literal double quotes, treat the inside as a
+                    // single phrase token (preserving the pre-2026 behavior
+                    // for users who want it).
+                    if kw.hasPrefix("\"") && kw.hasSuffix("\"") && kw.count >= 2 {
+                        let inner = String(kw.dropFirst().dropLast())
+                        let escaped = escapeQuery(inner)
+                        switch scope {
+                        case .title:
+                            return "ti:\(escaped)"
+                        case .abstract:
+                            return "abs:\(escaped)"
+                        case .titleAndAbstract:
+                            return "(ti:\(escaped) OR abs:\(escaped))"
+                        }
                     }
+
+                    // Website-equivalent behavior: split multi-word keywords
+                    // on whitespace and AND the tokens within the scope. This
+                    // matches papers where the words appear non-adjacently,
+                    // whereas wrapping as a Lucene phrase would not. Each
+                    // token still goes through escapeQuery so hyphens in a
+                    // single token (e.g. "Gromov-Witten") remain quoted.
+                    let tokens = kw
+                        .split(whereSeparator: { $0.isWhitespace })
+                        .map(String.init)
+                        .filter { !$0.isEmpty }
+                    let tokenParts = tokens.map { tok -> String in
+                        let escaped = escapeQuery(tok)
+                        switch scope {
+                        case .title:
+                            return "ti:\(escaped)"
+                        case .abstract:
+                            return "abs:\(escaped)"
+                        case .titleAndAbstract:
+                            return "(ti:\(escaped) OR abs:\(escaped))"
+                        }
+                    }
+                    if tokenParts.count > 1 {
+                        return "(\(tokenParts.joined(separator: " AND ")))"
+                    }
+                    return tokenParts.first ?? ""
                 }
                 if keywordParts.count > 1 {
                     return "(\(keywordParts.joined(separator: " OR ")))"
@@ -124,6 +184,13 @@ struct ArXivAPIClient {
             let (data, httpResponse) = try await fetchWithRetry(url: url)
 
             guard httpResponse.statusCode == 200 else {
+                // 429 should have been handled inside fetchWithRetry (either
+                // retried to success or thrown as .rateLimited). Still map
+                // it explicitly here so a straggler can't surface as a
+                // generic httpError(429) and bypass the friendlier UI path.
+                if httpResponse.statusCode == 429 {
+                    throw ArXivError.rateLimited(retryAfterSeconds: nil)
+                }
                 throw ArXivError.httpError(httpResponse.statusCode)
             }
 
@@ -171,8 +238,8 @@ struct ArXivAPIClient {
         return allPapers
     }
 
-    /// Fetch a single page with one retry on transient failures (timeout, HTTP 5xx).
-    /// 4xx responses are returned without retry; the caller decides how to react.
+    /// Fetch a single page with one retry on transient failures (timeout, HTTP 5xx, HTTP 429).
+    /// 4xx responses other than 429 are returned without retry; the caller decides how to react.
     /// - Parameters:
     ///   - url: The URL to GET.
     ///   - session: URLSession to use. Defaults to the shared `ArXivAPIClient.session`.
@@ -186,9 +253,35 @@ struct ArXivAPIClient {
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw ArXivError.httpError(-1)
             }
+            // Retry once on 429 (rate limited). Honor a `Retry-After` header
+            // if present; otherwise default to 30 seconds. Bounded so the
+            // server can't stall us for many minutes.
+            if httpResponse.statusCode == 429 {
+                let retryAfterSeconds = parseRetryAfter(from: httpResponse)
+                let baseNanos = rateLimitedBackoffNanoseconds(forRetryAfterSeconds: retryAfterSeconds)
+                let jitterNanos = rateLimitedJitterMaxNanoseconds > 0
+                    ? UInt64.random(in: 0..<rateLimitedJitterMaxNanoseconds)
+                    : 0
+                try await Task.sleep(nanoseconds: baseNanos &+ jitterNanos)
+                let (retryData, retryResponse) = try await session.data(from: url)
+                guard let retryHTTP = retryResponse as? HTTPURLResponse else {
+                    throw ArXivError.httpError(-1)
+                }
+                if retryHTTP.statusCode == 429 {
+                    // Surface the header from the retry response (may differ
+                    // from the first one). Fall back to the original's value
+                    // if the retry omits it.
+                    let retrySeconds = parseRetryAfter(from: retryHTTP) ?? retryAfterSeconds
+                    throw ArXivError.rateLimited(retryAfterSeconds: retrySeconds)
+                }
+                return (retryData, retryHTTP)
+            }
             // Retry once on 5xx
             if httpResponse.statusCode >= 500 && httpResponse.statusCode < 600 {
-                try await Task.sleep(nanoseconds: retryBackoffNanoseconds)
+                let jitterNanos = retryJitterMaxNanoseconds > 0
+                    ? UInt64.random(in: 0..<retryJitterMaxNanoseconds)
+                    : 0
+                try await Task.sleep(nanoseconds: retryBackoffNanoseconds &+ jitterNanos)
                 let (retryData, retryResponse) = try await session.data(from: url)
                 guard let retryHTTP = retryResponse as? HTTPURLResponse else {
                     throw ArXivError.httpError(-1)
@@ -198,13 +291,69 @@ struct ArXivAPIClient {
             return (data, httpResponse)
         } catch let error as URLError where Self.transientURLErrorCodes.contains(error.code) {
             // Retry once on transient transport errors
-            try await Task.sleep(nanoseconds: retryBackoffNanoseconds)
+            let jitterNanos = retryJitterMaxNanoseconds > 0
+                ? UInt64.random(in: 0..<retryJitterMaxNanoseconds)
+                : 0
+            try await Task.sleep(nanoseconds: retryBackoffNanoseconds &+ jitterNanos)
             let (data, response) = try await session.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw ArXivError.httpError(-1)
             }
             return (data, httpResponse)
         }
+    }
+
+    /// Parse an HTTP `Retry-After` header into seconds. Accepts either an
+    /// integer seconds value or an HTTP-date (RFC 1123). Returns nil if the
+    /// header is missing or unparseable.
+    static func parseRetryAfter(from response: HTTPURLResponse) -> Int? {
+        // Header lookup is case-insensitive per RFC 7231.
+        let raw: String?
+        if let v = response.value(forHTTPHeaderField: "Retry-After") {
+            raw = v
+        } else if let v = response.allHeaderFields["Retry-After"] as? String {
+            raw = v
+        } else {
+            raw = nil
+        }
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if let seconds = Int(value) {
+            return seconds
+        }
+        // HTTP-date: try RFC 1123 first, then a couple of common variants.
+        let formatters: [DateFormatter] = {
+            let rfc1123 = DateFormatter()
+            rfc1123.locale = Locale(identifier: "en_US_POSIX")
+            rfc1123.timeZone = TimeZone(identifier: "GMT")
+            rfc1123.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            return [rfc1123]
+        }()
+        for f in formatters {
+            if let date = f.date(from: value) {
+                let delta = Int(date.timeIntervalSinceNow.rounded())
+                return max(0, delta)
+            }
+        }
+        return nil
+    }
+
+    /// Compute the base backoff nanoseconds for a 429 retry. If the server
+    /// provided a parseable `Retry-After` value, clamp it to [15, 120]
+    /// seconds; otherwise use the configured default
+    /// (`rateLimitedBackoffNanoseconds`). The result is then capped by
+    /// `rateLimitedBackoffCapNanoseconds` (production: UInt64.max, tests:
+    /// small) so suites don't stall on server-supplied long waits.
+    private static func rateLimitedBackoffNanoseconds(forRetryAfterSeconds retryAfter: Int?) -> UInt64 {
+        let base: UInt64
+        if let retryAfter, retryAfter > 0 {
+            let clamped = min(max(retryAfter, 15), 120)
+            base = UInt64(clamped) * 1_000_000_000
+        } else {
+            base = rateLimitedBackoffNanoseconds
+        }
+        return min(base, rateLimitedBackoffCapNanoseconds)
     }
 
     /// Result of applying a client-side date filter to a single page of papers.
@@ -283,12 +432,18 @@ enum ArXivError: Error, LocalizedError {
     case invalidQuery
     case httpError(Int)
     case parseError
+    case rateLimited(retryAfterSeconds: Int?)
 
     var errorDescription: String? {
         switch self {
         case .invalidQuery: return "Invalid search query"
         case .httpError(let code): return "HTTP error \(code)"
         case .parseError: return "Failed to parse arXiv response"
+        case .rateLimited(let retryAfterSeconds):
+            if let retryAfterSeconds {
+                return "arXiv is rate-limiting us. Try again in about \(retryAfterSeconds) seconds."
+            }
+            return "arXiv is rate-limiting us. Try again in a minute."
         }
     }
 }

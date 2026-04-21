@@ -13,22 +13,34 @@ struct PersistedData: Codable {
     var matchedPapers: [String: MatchedPaper]
     var lastCycleAt: String?
     var lastCycleFailedSearchIDs: [UUID]
+    /// IDs of searches whose last failure was HTTP 429. Persisted so relaunch
+    /// doesn't misclassify rate-limited searches as generic failures.
+    var rateLimitedSearchIDs: [UUID]
+    /// Absolute wall-clock time until which each rate-limited search should
+    /// stay in "waiting" state. Persisted alongside `rateLimitedSearchIDs` so
+    /// the popover can render "retry at 16:10" consistently across launches.
+    var rateLimitedUntil: [UUID: Date]
 
     static let empty = PersistedData(
         dataVersion: currentDataVersion,
         savedSearches: [],
         matchedPapers: [:],
         lastCycleAt: nil,
-        lastCycleFailedSearchIDs: []
+        lastCycleFailedSearchIDs: [],
+        rateLimitedSearchIDs: [],
+        rateLimitedUntil: [:]
     )
 
     init(dataVersion: Int = currentDataVersion, savedSearches: [SavedSearch], matchedPapers: [String: MatchedPaper],
-         lastCycleAt: String?, lastCycleFailedSearchIDs: [UUID]) {
+         lastCycleAt: String?, lastCycleFailedSearchIDs: [UUID],
+         rateLimitedSearchIDs: [UUID] = [], rateLimitedUntil: [UUID: Date] = [:]) {
         self.dataVersion = dataVersion
         self.savedSearches = savedSearches
         self.matchedPapers = matchedPapers
         self.lastCycleAt = lastCycleAt
         self.lastCycleFailedSearchIDs = lastCycleFailedSearchIDs
+        self.rateLimitedSearchIDs = rateLimitedSearchIDs
+        self.rateLimitedUntil = rateLimitedUntil
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +50,8 @@ struct PersistedData: Codable {
         matchedPapers = try container.decode([String: MatchedPaper].self, forKey: .matchedPapers)
         lastCycleAt = try container.decodeIfPresent(String.self, forKey: .lastCycleAt)
         lastCycleFailedSearchIDs = try container.decodeIfPresent([UUID].self, forKey: .lastCycleFailedSearchIDs) ?? []
+        rateLimitedSearchIDs = try container.decodeIfPresent([UUID].self, forKey: .rateLimitedSearchIDs) ?? []
+        rateLimitedUntil = try container.decodeIfPresent([UUID: Date].self, forKey: .rateLimitedUntil) ?? [:]
     }
 }
 
@@ -49,6 +63,17 @@ final class AppState: ObservableObject {
     @Published var matchedPapers: [String: MatchedPaper] = [:]
     @Published var lastCycleAt: String?
     @Published var lastCycleFailedSearchIDs: [UUID] = []
+    /// Subset of `lastCycleFailedSearchIDs` whose last failure was HTTP 429
+    /// (arXiv rate-limiting us). Tracked separately so the UI can show a
+    /// friendlier "waiting" message instead of the generic "failed · Retry"
+    /// prompt. Persisted so relaunch preserves the classification — otherwise
+    /// restored 429s would render as generic failures with a red Retry link.
+    @Published var rateLimitedSearchIDs: Set<UUID> = []
+    /// Absolute wall-clock time until which each rate-limited search should
+    /// stay in "waiting" state (computed as `Date() + Retry-After` when the
+    /// 429 lands). Absence of a key means the server didn't send a parseable
+    /// `Retry-After`; the popover falls back to a generic "waiting…" label.
+    @Published var rateLimitedUntil: [UUID: Date] = [:]
     @Published var isFetching = false
     @Published var fetchProgress: String?
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
@@ -105,7 +130,40 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Names of searches whose most recent failure was HTTP 429 rate-limiting
+    /// AND whose cooldown has not yet elapsed. An expired cooldown (or a
+    /// missing `rateLimitedUntil` entry) falls through to `otherFailedSearchNames`
+    /// so the user gets a Retry button back instead of a permanent "waiting…".
+    var rateLimitedSearchNames: [String] {
+        let now = Date()
+        return lastCycleFailedSearchIDs.compactMap { id in
+            guard rateLimitedSearchIDs.contains(id) else { return nil }
+            guard let until = rateLimitedUntil[id], until > now else { return nil }
+            return savedSearches.first(where: { $0.id == id })?.name
+        }
+    }
+
+    /// Names of searches that failed for reasons OTHER than an active
+    /// rate-limit cooldown. These get the red "failed · Retry" treatment.
+    /// Rate-limited searches whose cooldown has expired fall into this list
+    /// so the user can manually retry them.
+    var otherFailedSearchNames: [String] {
+        let now = Date()
+        return lastCycleFailedSearchIDs.compactMap { id in
+            let isActiveRateLimited = rateLimitedSearchIDs.contains(id)
+                && (rateLimitedUntil[id].map { $0 > now } ?? false)
+            guard !isActiveRateLimited else { return nil }
+            return savedSearches.first(where: { $0.id == id })?.name
+        }
+    }
+
     // MARK: - Persistence
+
+    /// Fallback cooldown (seconds) applied when a 429 lacks a `Retry-After`
+    /// header. Matches `ArXivAPIClient.rateLimitedBackoffNanoseconds` (30s) +
+    /// `rateLimitedJitterMaxNanoseconds` (5s) upper bound so the UI cooldown
+    /// can't expire before the next retry even in the worst-case jitter draw.
+    private let fallbackRateLimitCooldownSeconds: Int = 35
 
     private let dataDirectoryURL: URL
 
@@ -166,6 +224,8 @@ final class AppState: ObservableObject {
             matchedPapers = persisted.matchedPapers
             lastCycleAt = persisted.lastCycleAt
             lastCycleFailedSearchIDs = persisted.lastCycleFailedSearchIDs
+            rateLimitedSearchIDs = Set(persisted.rateLimitedSearchIDs)
+            rateLimitedUntil = persisted.rateLimitedUntil
 
             // Re-save to update version stamp if needed
             if persisted.dataVersion < currentDataVersion {
@@ -181,7 +241,9 @@ final class AppState: ObservableObject {
             savedSearches: savedSearches,
             matchedPapers: matchedPapers,
             lastCycleAt: lastCycleAt,
-            lastCycleFailedSearchIDs: lastCycleFailedSearchIDs
+            lastCycleFailedSearchIDs: lastCycleFailedSearchIDs,
+            rateLimitedSearchIDs: Array(rateLimitedSearchIDs),
+            rateLimitedUntil: rateLimitedUntil
         )
     }
 
@@ -382,6 +444,11 @@ final class AppState: ObservableObject {
 
             // Scrub this search's ID from all papers
             scrubSearchID(updated.id)
+
+            // Old failure/rate-limit metadata no longer describes this search
+            // now that its query semantics changed — drop it so the popover
+            // doesn't keep warning about a failure that may not recur.
+            clearFetchStatus(for: updated.id)
         } else if old.fetchFromDate != updated.fetchFromDate {
             // Date window changed but clauses are the same — re-fetch but keep existing papers
             savedSearches[index].lastQueriedAt = nil
@@ -393,7 +460,20 @@ final class AppState: ObservableObject {
     func deleteSearch(_ searchID: UUID) {
         savedSearches.removeAll { $0.id == searchID }
         scrubSearchID(searchID)
+        // A deleted search shouldn't skew the popover's "retry at …" time
+        // (rateLimitedStatusText scans rateLimitedSearchIDs for the latest
+        // until-time) or inflate the failure list.
+        clearFetchStatus(for: searchID)
         save()
+    }
+
+    /// Strip a search's ID out of all fetch-status collections. Used when the
+    /// search is deleted or has its query semantics changed — in either case
+    /// the old failure classification no longer applies.
+    private func clearFetchStatus(for searchID: UUID) {
+        lastCycleFailedSearchIDs.removeAll { $0 == searchID }
+        rateLimitedSearchIDs.remove(searchID)
+        rateLimitedUntil.removeValue(forKey: searchID)
     }
 
     func togglePause(_ searchID: UUID) {
@@ -492,11 +572,15 @@ final class AppState: ObservableObject {
 
     // MARK: - Fetch Cycle
 
-    func runFetchCycle() {
+    /// Kick off a fetch cycle.
+    /// - Parameter onlySearchIDs: When non-nil, fetches only the saved searches whose IDs
+    ///   appear in this set (bypassing the paused filter — explicit user-scoped refresh
+    ///   overrides pause). When nil, fetches all non-paused searches (default behavior).
+    func runFetchCycle(onlySearchIDs: Set<UUID>? = nil) {
         guard !isFetching else { return }
         isFetching = true
         Task {
-            await performFetchCycle()
+            await performFetchCycle(onlySearchIDs: onlySearchIDs)
         }
     }
 
@@ -509,7 +593,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func performFetchCycle(staleOnly: Bool = false) async {
+    private func performFetchCycle(staleOnly: Bool = false, onlySearchIDs: Set<UUID>? = nil) async {
         fetchProgress = "Checking arXiv..."
 
         let formatter = ISO8601DateFormatter()
@@ -519,7 +603,11 @@ final class AppState: ObservableObject {
         // Determine which searches to fetch
         let threshold = PollScheduler.mostRecentScheduledRun()
         let searchesToFetch: [SavedSearch]
-        if staleOnly {
+        if let scopedIDs = onlySearchIDs {
+            // Explicit per-search refresh: include even paused searches the user
+            // explicitly targeted, but preserve sidebar order.
+            searchesToFetch = savedSearches.filter { scopedIDs.contains($0.id) }
+        } else if staleOnly {
             searchesToFetch = savedSearches.filter { search in
                 guard !search.isPaused else { return false }
                 guard let lastQueried = search.lastQueriedAt,
@@ -548,6 +636,8 @@ final class AppState: ObservableObject {
         var pendingRevisions: [String: MatchedPaper] = [:]
         var pendingSearchIDs: [String: Set<UUID>] = [:]
         var failedSearchIDs: Set<UUID> = []
+        var rateLimitedIDs: Set<UUID> = []
+        var rateLimitedUntilThisCycle: [UUID: Date] = [:]
         var successfulTimestamps: [UUID: String] = [:]
 
         for (idx, search) in searchesToFetch.enumerated() {
@@ -640,6 +730,17 @@ final class AppState: ObservableObject {
             } catch {
                 print("[ArXivMonitor] Fetch failed for '\(search.name)': \(error)")
                 failedSearchIDs.insert(search.id)
+                if case ArXivError.rateLimited(let retryAfter) = error {
+                    rateLimitedIDs.insert(search.id)
+                    // Always store an until-time. With an explicit Retry-After
+                    // we honor it; without one, fall back to the same bounded
+                    // backoff + jitter upper bound the retry path uses, so
+                    // the UI has a concrete expiry to age the entry out
+                    // instead of leaving the search "rate-limited forever".
+                    let seconds = retryAfter ?? fallbackRateLimitCooldownSeconds
+                    rateLimitedUntilThisCycle[search.id] =
+                        Date().addingTimeInterval(TimeInterval(seconds))
+                }
             }
         }
 
@@ -676,9 +777,37 @@ final class AppState: ObservableObject {
                 savedSearches[idx].lastQueriedAt = timestamp
             }
         }
-        // Update cycle state
-        lastCycleAt = cycleStartedAt
-        lastCycleFailedSearchIDs = Array(failedSearchIDs)
+        // Update cycle state. A scoped fetch (single-search refresh) must not
+        // overwrite cycle-wide status: only merge in/out the searches it actually
+        // touched, so previously-failed searches that weren't retried aren't
+        // misreported as successful.
+        if let scopedIDs = onlySearchIDs {
+            var merged = Set(lastCycleFailedSearchIDs)
+            // Remove scoped searches that just succeeded...
+            merged.subtract(scopedIDs.subtracting(failedSearchIDs))
+            // ...and add any that failed on this scoped attempt.
+            merged.formUnion(failedSearchIDs)
+            lastCycleFailedSearchIDs = Array(merged)
+            // Mirror the same merge logic for the rate-limited subset so a
+            // scoped retry that clears the 429 also clears the friendlier
+            // UI state, without wiping sibling searches' status.
+            var mergedRateLimited = rateLimitedSearchIDs
+            mergedRateLimited.subtract(scopedIDs.subtracting(rateLimitedIDs))
+            mergedRateLimited.formUnion(rateLimitedIDs)
+            rateLimitedSearchIDs = mergedRateLimited
+            for id in scopedIDs where !rateLimitedIDs.contains(id) {
+                rateLimitedUntil.removeValue(forKey: id)
+            }
+            for (id, until) in rateLimitedUntilThisCycle {
+                rateLimitedUntil[id] = until
+            }
+            // Leave lastCycleAt untouched — a scoped refresh isn't a full cycle.
+        } else {
+            lastCycleAt = cycleStartedAt
+            lastCycleFailedSearchIDs = Array(failedSearchIDs)
+            rateLimitedSearchIDs = rateLimitedIDs
+            rateLimitedUntil = rateLimitedUntilThisCycle
+        }
 
         // Persist
         save()
@@ -797,6 +926,8 @@ final class AppState: ObservableObject {
         ]
         lastCycleAt = now
         lastCycleFailedSearchIDs = []
+        rateLimitedSearchIDs = []
+        rateLimitedUntil = [:]
         save()
     }
 }
