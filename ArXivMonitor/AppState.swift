@@ -148,12 +148,21 @@ final class AppState: ObservableObject {
     /// Rate-limited searches whose cooldown has expired fall into this list
     /// so the user can manually retry them.
     var otherFailedSearchNames: [String] {
+        otherFailedSearchIDs.compactMap { id in
+            savedSearches.first(where: { $0.id == id })?.name
+        }
+    }
+
+    /// IDs matching `otherFailedSearchNames`. Preserved in the same order as
+    /// `lastCycleFailedSearchIDs` so UI rendering and scoped retry stay in
+    /// sync. Used by the popover's Retry button to avoid re-hitting searches
+    /// that are still in 429 cooldown (which would just extend the limit).
+    var otherFailedSearchIDs: [UUID] {
         let now = Date()
-        return lastCycleFailedSearchIDs.compactMap { id in
+        return lastCycleFailedSearchIDs.filter { id in
             let isActiveRateLimited = rateLimitedSearchIDs.contains(id)
                 && (rateLimitedUntil[id].map { $0 > now } ?? false)
-            guard !isActiveRateLimited else { return nil }
-            return savedSearches.first(where: { $0.id == id })?.name
+            return !isActiveRateLimited
         }
     }
 

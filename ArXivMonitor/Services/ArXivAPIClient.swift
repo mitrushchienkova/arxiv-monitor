@@ -257,8 +257,14 @@ struct ArXivAPIClient {
             // if present; otherwise default to 30 seconds. Bounded so the
             // server can't stall us for many minutes.
             if httpResponse.statusCode == 429 {
-                let retryAfterSeconds = parseRetryAfter(from: httpResponse)
-                let baseNanos = rateLimitedBackoffNanoseconds(forRetryAfterSeconds: retryAfterSeconds)
+                // Compute the EFFECTIVE cooldown once (applies the [15, 120]s
+                // clamp) and thread the same value through both the sleep and
+                // any thrown error. Using the raw parsed value in the error
+                // would let the UI cooldown age out before the client's
+                // actual retry wait elapses (e.g. Retry-After: 1 => wait 15s
+                // but popover invites retry after 1s).
+                let firstEffective = Self.effectiveRetryAfterSeconds(parseRetryAfter(from: httpResponse))
+                let baseNanos = rateLimitedBackoffNanoseconds(forEffectiveSeconds: firstEffective)
                 let jitterNanos = rateLimitedJitterMaxNanoseconds > 0
                     ? UInt64.random(in: 0..<rateLimitedJitterMaxNanoseconds)
                     : 0
@@ -268,11 +274,12 @@ struct ArXivAPIClient {
                     throw ArXivError.httpError(-1)
                 }
                 if retryHTTP.statusCode == 429 {
-                    // Surface the header from the retry response (may differ
-                    // from the first one). Fall back to the original's value
-                    // if the retry omits it.
-                    let retrySeconds = parseRetryAfter(from: retryHTTP) ?? retryAfterSeconds
-                    throw ArXivError.rateLimited(retryAfterSeconds: retrySeconds)
+                    // Prefer the retry response's Retry-After (may have
+                    // shifted); fall back to the first one if absent. Either
+                    // way, surface the clamped/effective value so the UI and
+                    // the client agree on the cooldown.
+                    let retryEffective = Self.effectiveRetryAfterSeconds(parseRetryAfter(from: retryHTTP)) ?? firstEffective
+                    throw ArXivError.rateLimited(retryAfterSeconds: retryEffective)
                 }
                 return (retryData, retryHTTP)
             }
@@ -339,17 +346,26 @@ struct ArXivAPIClient {
         return nil
     }
 
-    /// Compute the base backoff nanoseconds for a 429 retry. If the server
-    /// provided a parseable `Retry-After` value, clamp it to [15, 120]
-    /// seconds; otherwise use the configured default
-    /// (`rateLimitedBackoffNanoseconds`). The result is then capped by
-    /// `rateLimitedBackoffCapNanoseconds` (production: UInt64.max, tests:
-    /// small) so suites don't stall on server-supplied long waits.
-    private static func rateLimitedBackoffNanoseconds(forRetryAfterSeconds retryAfter: Int?) -> UInt64 {
+    /// Apply the [15, 120]-second clamp both the retry sleep and the thrown
+    /// error surface. Returns nil when the server didn't provide a parseable
+    /// positive value — the caller then falls back to the configured default
+    /// (`rateLimitedBackoffNanoseconds`) and the popover uses a matching
+    /// fallback cooldown. Exposed at the type level so tests can assert the
+    /// clamp directly and AppState could use it if it ever needed to.
+    static func effectiveRetryAfterSeconds(_ raw: Int?) -> Int? {
+        guard let raw, raw > 0 else { return nil }
+        return min(max(raw, 15), 120)
+    }
+
+    /// Compute the base backoff nanoseconds for a 429 retry from the already
+    /// clamped effective value. `nil` means fall back to the configured
+    /// default. The result is capped by `rateLimitedBackoffCapNanoseconds`
+    /// (production: UInt64.max, tests: small) so suites don't stall on
+    /// server-supplied long waits.
+    private static func rateLimitedBackoffNanoseconds(forEffectiveSeconds effective: Int?) -> UInt64 {
         let base: UInt64
-        if let retryAfter, retryAfter > 0 {
-            let clamped = min(max(retryAfter, 15), 120)
-            base = UInt64(clamped) * 1_000_000_000
+        if let effective {
+            base = UInt64(effective) * 1_000_000_000
         } else {
             base = rateLimitedBackoffNanoseconds
         }

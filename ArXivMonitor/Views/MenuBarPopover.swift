@@ -116,7 +116,13 @@ struct MenuBarPopover: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.red)
                     Button("Retry") {
-                        appState.runFetchCycle()
+                        // Scope the retry to the non-rate-limited subset so
+                        // we don't re-hit searches that are still in 429
+                        // cooldown — doing so would just reset the limit.
+                        let ids = Set(appState.otherFailedSearchIDs)
+                        if !ids.isEmpty {
+                            appState.runFetchCycle(onlySearchIDs: ids)
+                        }
                     }
                     .font(.system(size: 10))
                     .buttonStyle(.link)
@@ -229,22 +235,31 @@ struct MenuBarPopover: View {
         return timeFormatter.string(from: date)
     }
 
-    /// Compose the rate-limited status line. When every rate-limited search
-    /// shares the same `rateLimitedUntil` date (common: a single fetch cycle
-    /// triggers the 429 for all of them at once), show "retry at 16:10" using
-    /// the latest such moment. Fall back to "waiting…" if no `Retry-After` was
-    /// surfaced. Absolute time avoids the stale-seconds problem a live counter
-    /// would have without a ticking timer.
+    /// Compose the rate-limited status line. Shows a concrete "retry at 16:10"
+    /// ONLY when every currently-active cooldown shares the same (±1s) target
+    /// time — the common case where one fetch cycle 429'd every search at once.
+    /// If cooldowns diverge (e.g. after a scoped refresh bumped one search's
+    /// clock but not the others), fall back to "waiting…" rather than pick a
+    /// max time that misrepresents the other searches. Absolute time avoids
+    /// the stale-seconds problem a live counter would have without a ticking
+    /// timer.
     private func rateLimitedStatusText(names: [String]) -> String {
         let joined = names.joined(separator: ", ")
-        let latestRetryAt = appState.rateLimitedSearchIDs
-            .compactMap { appState.rateLimitedUntil[$0] }
-            .max()
-        if let retryAt = latestRetryAt {
-            let f = DateFormatter()
-            f.timeStyle = .short
-            return "\(joined): arXiv rate-limited, retry at \(f.string(from: retryAt))"
+        let now = Date()
+        let activeTimes: [Date] = appState.rateLimitedSearchIDs
+            .compactMap { id in
+                guard let t = appState.rateLimitedUntil[id], t > now else { return nil }
+                return t
+            }
+        guard let first = activeTimes.first else {
+            return "\(joined): arXiv rate-limited, waiting…"
         }
-        return "\(joined): arXiv rate-limited, waiting…"
+        let allShareTime = activeTimes.allSatisfy { abs($0.timeIntervalSince(first)) < 1.0 }
+        guard allShareTime else {
+            return "\(joined): arXiv rate-limited, waiting…"
+        }
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return "\(joined): arXiv rate-limited, retry at \(f.string(from: first))"
     }
 }

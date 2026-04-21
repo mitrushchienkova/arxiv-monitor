@@ -714,6 +714,61 @@ final class ArXivAPIClientRateLimitTests: XCTestCase {
         XCTAssertEqual(MockURLProtocol.requestCount, 2)
     }
 
+    /// `Retry-After: 1` (below the 15s floor) should surface the clamped
+    /// value in the thrown error — otherwise the UI cooldown ages out before
+    /// the client's actual retry wait elapses.
+    func testFetchWithRetry_429WithRetryAfterBelowFloor_surfacesClamped() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "1"]),
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "1"]),
+        ]
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected .rateLimited")
+        } catch let error as ArXivError {
+            guard case .rateLimited(let seconds) = error else {
+                XCTFail("Expected .rateLimited, got \(error)")
+                return
+            }
+            XCTAssertEqual(seconds, 15, "Retry-After below the 15s floor should be clamped to 15")
+        }
+    }
+
+    /// `Retry-After: 200` (above the 120s ceiling) should surface the clamped
+    /// value in the thrown error so the UI doesn't wait longer than the
+    /// client actually slept.
+    func testFetchWithRetry_429WithRetryAfterAboveCeiling_surfacesClamped() async throws {
+        let session = makeStubSession()
+        MockURLProtocol.responses = [
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "200"]),
+            .init(status: 429, body: Data(), error: nil, headers: ["Retry-After": "200"]),
+        ]
+        do {
+            _ = try await ArXivAPIClient.fetchWithRetry(url: url, session: session)
+            XCTFail("Expected .rateLimited")
+        } catch let error as ArXivError {
+            guard case .rateLimited(let seconds) = error else {
+                XCTFail("Expected .rateLimited, got \(error)")
+                return
+            }
+            XCTAssertEqual(seconds, 120, "Retry-After above the 120s ceiling should be clamped to 120")
+        }
+    }
+
+    /// Unit-level assertions on the clamp helper. Explicit so a future edit
+    /// that widens either bound is called out by the test suite.
+    func testEffectiveRetryAfterSeconds_clampsAndRejectsNonPositive() {
+        XCTAssertEqual(ArXivAPIClient.effectiveRetryAfterSeconds(1), 15)
+        XCTAssertEqual(ArXivAPIClient.effectiveRetryAfterSeconds(15), 15)
+        XCTAssertEqual(ArXivAPIClient.effectiveRetryAfterSeconds(45), 45)
+        XCTAssertEqual(ArXivAPIClient.effectiveRetryAfterSeconds(120), 120)
+        XCTAssertEqual(ArXivAPIClient.effectiveRetryAfterSeconds(200), 120)
+        XCTAssertNil(ArXivAPIClient.effectiveRetryAfterSeconds(nil))
+        XCTAssertNil(ArXivAPIClient.effectiveRetryAfterSeconds(0))
+        XCTAssertNil(ArXivAPIClient.effectiveRetryAfterSeconds(-5))
+    }
+
     /// The `parseRetryAfter` helper should accept both integer-seconds and
     /// RFC 1123 date forms, and return nil for missing/garbage headers.
     func testParseRetryAfter_acceptsSecondsAndHTTPDate() {
@@ -1201,6 +1256,33 @@ final class AppStateTests: XCTestCase {
                        "Expired cooldown must not pin the search in 'waiting…' state")
         XCTAssertEqual(state.otherFailedSearchNames, ["Stale"],
                        "Expired rate-limit should surface a Retry prompt like any other failure")
+    }
+
+    /// `otherFailedSearchIDs` and `otherFailedSearchNames` must agree — the
+    /// popover's Retry button uses the IDs to scope a fetch cycle that only
+    /// re-hits searches NOT in cooldown. If these drifted apart, a retry
+    /// could either miss a failed search or inadvertently re-hit a 429'd one
+    /// (extending the cooldown).
+    func testOtherFailedSearchIDsExcludesActiveRateLimited() {
+        let state = AppState(dataDirectoryURL: tempDir)
+        let active = SavedSearch(name: "Active",   clauses: [SearchClause(field: .keyword, value: "a", scope: .title)])
+        let expired = SavedSearch(name: "Expired", clauses: [SearchClause(field: .keyword, value: "e", scope: .title)])
+        let generic = SavedSearch(name: "Generic", clauses: [SearchClause(field: .keyword, value: "g", scope: .title)])
+        state.savedSearches = [active, expired, generic]
+        state.lastCycleFailedSearchIDs = [active.id, expired.id, generic.id]
+        state.rateLimitedSearchIDs = [active.id, expired.id]
+        state.rateLimitedUntil = [
+            active.id: Date().addingTimeInterval(60),   // cooldown still active
+            expired.id: Date().addingTimeInterval(-60), // cooldown elapsed
+        ]
+
+        XCTAssertEqual(state.rateLimitedSearchNames, ["Active"])
+        XCTAssertEqual(state.otherFailedSearchNames, ["Expired", "Generic"],
+                       "Expired rate-limit should fall through; generic stays")
+        XCTAssertEqual(state.otherFailedSearchIDs, [expired.id, generic.id],
+                       "IDs must agree with names for scoped retry to target the right searches")
+        XCTAssertFalse(state.otherFailedSearchIDs.contains(active.id),
+                       "Retrying an active 429 would just extend the cooldown")
     }
 
     /// A rate-limited entry with no `rateLimitedUntil` timestamp (e.g. a
